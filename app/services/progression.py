@@ -43,7 +43,7 @@ def suggest_next_weight(
     plan_hit = sets_count >= target_sets and reps >= reps_min
 
     if difficulty in (Difficulty.hard, Difficulty.failure):
-        streak = (state.hard_streak + 1) if state else 1
+        streak = ((state.hard_streak or 0) + 1) if state else 1
         note = "вес оставляем"
         if streak >= 2:
             note = "два раза тяжело подряд — застрял, вес не трогаем"

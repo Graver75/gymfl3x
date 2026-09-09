@@ -56,53 +56,6 @@ async def build_group_recap(session: AsyncSession, template: WorkoutTemplate, da
     return "\n".join(lines).rstrip()
 
 
-async def build_group_recap(session: AsyncSession, template: WorkoutTemplate, day: date) -> str:
-    """Build chat recap in the familiar format:
-
-    #деньспины
-    Упражнение
-    И 12×55×4 легко
-    К 12×50×4 норм
-    """
-    result = await session.execute(
-        select(WorkoutSession)
-        .where(
-            WorkoutSession.session_date == day,
-            WorkoutSession.template_id == template.id,
-            WorkoutSession.status == SessionStatus.finished,
-        )
-        .options(
-            selectinload(WorkoutSession.user),
-            selectinload(WorkoutSession.sets),
-        )
-    )
-    sessions = list(result.scalars().all())
-    if not sessions:
-        return f"#{template.hashtag}\nПока никто не залогировал тренировку."
-
-    by_exercise: dict[str, list[str]] = defaultdict(list)
-    order: list[str] = []
-
-    for ws in sorted(sessions, key=lambda s: s.user.short_code):
-        code = ws.user.short_code
-        for sset in ws.sets:
-            name = sset.exercise_name
-            if name not in by_exercise:
-                order.append(name)
-            line = (
-                f"{code} {format_block(sset.reps, sset.weight, sset.sets_count)} "
-                f"{DIFFICULTY_LABELS[sset.difficulty]}"
-            )
-            by_exercise[name].append(line)
-
-    lines = [f"#{template.hashtag}"]
-    for name in order:
-        lines.append(name)
-        lines.extend(by_exercise[name])
-        lines.append("")
-    return "\n".join(lines).rstrip()
-
-
 async def build_personal_retrospective(
     session: AsyncSession,
     current: WorkoutSession,

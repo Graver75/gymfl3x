@@ -101,7 +101,7 @@ def weight_kb(
 
 
 def reps_kb(target_min: int, target_max: int, last_reps: int | None = None) -> InlineKeyboardMarkup:
-    options = [6, 8, 10, 12, 15]
+    options = [8, 10, 12, 15]
     for value in (target_min, target_max, last_reps):
         if value and value not in options:
             options.append(value)
