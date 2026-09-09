@@ -36,7 +36,7 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
             f"Привет, {user.display_name}!\n"
             f"Код в сводке: {user.short_code}\n"
             f"Фаза: {PHASE_LABELS[user.phase]}\n\n"
-            "Меню внизу: Тренировка / Сегодня / Программа / Профиль."
+            "Меню внизу: Тренировка / Сегодня / История / Программа / Профиль."
         )
         await message.answer(text, reply_markup=main_menu(user.is_admin))
         if payload == "workout":

@@ -9,7 +9,8 @@ from app.services.progression import PHASE_LABELS
 def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text="Тренировка"), KeyboardButton(text="Сегодня")],
-        [KeyboardButton(text="Программа"), KeyboardButton(text="Профиль")],
+        [KeyboardButton(text="История"), KeyboardButton(text="Программа")],
+        [KeyboardButton(text="Профиль")],
     ]
     if is_admin:
         rows.append([KeyboardButton(text="Админка")])
@@ -61,6 +62,9 @@ def weight_kb(
     exercise: TemplateExercise,
     state: UserExerciseState | None,
     draft_weight: float | None = None,
+    *,
+    weight_options: list[float] | None = None,
+    can_repeat_last: bool = False,
 ) -> InlineKeyboardMarkup:
     step = exercise.weight_step or 2.5
     base = draft_weight
@@ -79,37 +83,55 @@ def weight_kb(
             InlineKeyboardButton(text=f"+{step:g}", callback_data=f"wo:w:+:{step}"),
         ]
     ]
-    presets = []
-    for delta in (-step * 2, 0, step * 2):
-        val = max(0.0, base + delta)
+    presets: list[InlineKeyboardButton] = []
+    values: list[float] = []
+    if weight_options:
+        values.extend(weight_options)
+    else:
+        for delta in (-step * 2, 0, step * 2):
+            values.append(max(0.0, base + delta))
+    seen: set[float] = set()
+    for val in values:
+        key = round(float(val), 2)
+        if key in seen:
+            continue
+        seen.add(key)
+        mark = "✓ " if abs(float(val) - float(base)) < 0.01 else ""
         presets.append(
-            InlineKeyboardButton(text=f"{val:g}", callback_data=f"wo:w:=:{val}")
+            InlineKeyboardButton(text=f"{mark}{val:g}", callback_data=f"wo:w:=:{val}")
         )
-    buttons.append(presets)
-    if state and state.working_weight is not None and state.working_weight != base:
+        if len(presets) >= 6:
+            break
+    for i in range(0, len(presets), 3):
+        buttons.append(presets[i : i + 3])
+    if can_repeat_last:
         buttons.append(
-            [
-                InlineKeyboardButton(
-                    text=f"Прошлый: {state.working_weight:g}",
-                    callback_data=f"wo:w:=:{state.working_weight}",
-                )
-            ]
+            [InlineKeyboardButton(text="Как в прошлый раз", callback_data="wo:repeat_last")]
         )
     buttons.append([InlineKeyboardButton(text="Ввести вес", callback_data="wo:w:custom")])
     buttons.append([InlineKeyboardButton(text="« Назад", callback_data="wo:back")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def reps_kb(target_min: int, target_max: int, last_reps: int | None = None) -> InlineKeyboardMarkup:
-    options = [8, 10, 12, 15]
+def reps_kb(
+    target_min: int,
+    target_max: int,
+    last_reps: int | None = None,
+    *,
+    reps_options: list[int] | None = None,
+) -> InlineKeyboardMarkup:
+    options = list(reps_options or [8, 10, 12, 15])
     for value in (target_min, target_max, last_reps):
         if value and value not in options:
             options.append(value)
     options = sorted(set(options))
     row = [
-        InlineKeyboardButton(text=str(r), callback_data=f"wo:r:{r}") for r in options
+        InlineKeyboardButton(
+            text=("✓ " if last_reps and r == last_reps else "") + str(r),
+            callback_data=f"wo:r:{r}",
+        )
+        for r in options
     ]
-    # split into rows of 4
     rows = [row[i : i + 4] for i in range(0, len(row), 4)]
     rows.append([InlineKeyboardButton(text="Отказ", callback_data="wo:r:0")])
     rows.append([InlineKeyboardButton(text="Ввести число", callback_data="wo:r:custom")])
@@ -321,4 +343,61 @@ def archive_item_kb(item_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Удалить из архива", callback_data=f"adm:arch:del:{item_id}")],
             [InlineKeyboardButton(text="« К архиву", callback_data="adm:archive")],
         ]
+    )
+
+
+def history_home_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Последние тренировки", callback_data="hist:sessions")],
+            [InlineKeyboardButton(text="По упражнениям", callback_data="hist:exercises")],
+        ]
+    )
+
+
+def history_sessions_kb(sessions: list) -> InlineKeyboardMarkup:
+    rows = []
+    for ws in sessions:
+        title = ws.template.name if ws.template else "Тренировка"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{ws.session_date.isoformat()} · {title}",
+                    callback_data=f"hist:s:{ws.id}",
+                )
+            ]
+        )
+    if not rows:
+        rows.append([InlineKeyboardButton(text="Пока пусто", callback_data="adm:noop")])
+    rows.append([InlineKeyboardButton(text="« Назад", callback_data="hist:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def history_exercises_kb(names: list[str], page: int = 0) -> InlineKeyboardMarkup:
+    page_size = 8
+    start = page * page_size
+    chunk = names[start : start + page_size]
+    rows = [
+        [InlineKeyboardButton(text=name, callback_data=f"hist:e:{start + offset}")]
+        for offset, name in enumerate(chunk)
+    ]
+    nav = []
+    pages = max(1, (len(names) + page_size - 1) // page_size) if names else 1
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="‹", callback_data=f"hist:ep:{page - 1}"))
+    if pages > 1:
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{pages}", callback_data="adm:noop"))
+    if page + 1 < pages:
+        nav.append(InlineKeyboardButton(text="›", callback_data=f"hist:ep:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    if not chunk:
+        rows.append([InlineKeyboardButton(text="Пока пусто", callback_data="adm:noop")])
+    rows.append([InlineKeyboardButton(text="« Назад", callback_data="hist:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def history_back_kb(to: str = "hist:home") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="« Назад", callback_data=to)]]
     )
