@@ -10,6 +10,9 @@ class OnboardingSG(StatesGroup):
 
 
 class WorkoutSG(StatesGroup):
+    pick_mode = State()
+    pick_template = State()
+    pick_archive = State()
     pick_exercise = State()
     weight = State()
     custom_weight = State()
@@ -17,6 +20,13 @@ class WorkoutSG(StatesGroup):
     custom_reps = State()
     after_set = State()
     difficulty = State()
+    note = State()
+
+
+class EditSessionSG(StatesGroup):
+    pick_set = State()
+    edit_weight = State()
+    edit_reps = State()
 
 
 class AdminSG(StatesGroup):

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -930,6 +933,28 @@ async def adm_set_hours(message: Message, state: FSMContext) -> None:
         await session.commit()
     await state.clear()
     await message.answer(f"Часы: напоминание {rem}:00, сводка {rec}:00")
+
+
+@router.callback_query(F.data == "adm:missing")
+async def adm_missing_today(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    settings = get_settings()
+    today = datetime.now(ZoneInfo(settings.timezone)).date()
+    weekday = today.weekday()
+    async with SessionLocal() as session:
+        from app.services.reminders import get_template_for_weekday
+        from app.services.history import format_missing_today
+
+        template = await get_template_for_weekday(session, weekday)
+        text = await format_missing_today(
+            session, today, template.id if template else None
+        )
+    await callback.message.edit_text(text, reply_markup=admin_menu_kb())
+    await callback.answer()
 
 
 @router.callback_query(F.data == "adm:users")

@@ -322,9 +322,199 @@ async def format_exercise_history(
     )
     if not history:
         return f"{exercise_name}\nПока нет записей."
-    lines = [exercise_name, ""]
+    pr = await exercise_personal_records(session, user_id, exercise_name=exercise_name)
+    lines = [exercise_name]
+    if pr["best_weight"] is not None:
+        lines.append(
+            f"PR: {pr['best_weight']:g} кг · лучший сет {pr['best_reps']}×{pr['best_set_weight']:g}"
+        )
+    lines.append("")
     for ws in history:
         rows = [s for s in ws.sets if name_key(s.exercise_name) == name_key(exercise_name)]
         diff = DIFFICULTY_LABELS.get(rows[-1].difficulty, "") if rows else ""
         lines.append(f"{ws.session_date.isoformat()}: {format_session_exercise(rows)} {diff}".rstrip())
+    return "\n".join(lines)
+
+
+async def exercise_personal_records(
+    session: AsyncSession,
+    user_id: int,
+    *,
+    exercise_id: int | None = None,
+    exercise_name: str | None = None,
+) -> dict:
+    history = await _sessions_with_exercise(
+        session,
+        user_id,
+        exercise_id=exercise_id,
+        exercise_name=exercise_name,
+        limit=40,
+    )
+    best_weight = None
+    best_reps = None
+    best_set_weight = None
+    best_score = -1.0
+    for ws in history:
+        for s in ws.sets:
+            if exercise_id and s.exercise_id != exercise_id:
+                if not (exercise_name and name_key(s.exercise_name) == name_key(exercise_name)):
+                    continue
+            elif exercise_name and name_key(s.exercise_name) != name_key(exercise_name):
+                continue
+            w = float(s.weight)
+            r = int(s.reps)
+            if best_weight is None or w > best_weight:
+                best_weight = w
+            score = w * max(r, 1)
+            if score > best_score:
+                best_score = score
+                best_reps = r
+                best_set_weight = w
+    return {
+        "best_weight": best_weight,
+        "best_reps": best_reps,
+        "best_set_weight": best_set_weight,
+    }
+
+
+def format_pr_line(pr: dict) -> str:
+    if pr.get("best_weight") is None:
+        return ""
+    return (
+        f"PR: {pr['best_weight']:g} кг"
+        + (
+            f", лучший сет {pr['best_reps']}×{pr['best_set_weight']:g}"
+            if pr.get("best_reps") is not None
+            else ""
+        )
+    )
+
+
+async def compare_line_for_exercise(
+    session: AsyncSession,
+    user_id: int,
+    *,
+    exercise_id: int | None,
+    exercise_name: str,
+) -> str:
+    history = await _sessions_with_exercise(
+        session,
+        user_id,
+        exercise_id=exercise_id,
+        exercise_name=exercise_name,
+        limit=2,
+    )
+    if len(history) < 1:
+        return ""
+    last = history[0]
+    last_rows = [
+        s
+        for s in last.sets
+        if (exercise_id and s.exercise_id == exercise_id)
+        or name_key(s.exercise_name) == name_key(exercise_name)
+    ]
+    if not last_rows:
+        return ""
+    text = f"Прошлый раз ({last.session_date.isoformat()}): {format_session_exercise(last_rows)}"
+    if len(history) >= 2:
+        prev = history[1]
+        prev_rows = [
+            s
+            for s in prev.sets
+            if (exercise_id and s.exercise_id == exercise_id)
+            or name_key(s.exercise_name) == name_key(exercise_name)
+        ]
+        if prev_rows:
+            cur_w = max(s.weight for s in last_rows)
+            old_w = max(s.weight for s in prev_rows)
+            cur_v = sum(s.volume for s in last_rows)
+            old_v = sum(s.volume for s in prev_rows)
+            if cur_w > old_w or cur_v > old_v:
+                text += " ↑ лучше предыдущего"
+            elif cur_w < old_w and cur_v < old_v:
+                text += " ↓ слабее предыдущего"
+            else:
+                text += " ≈ как раньше"
+    return text
+
+
+async def format_athlete_week(session: AsyncSession, user_id: int, *, days: int = 7) -> str:
+    from datetime import date, timedelta
+
+    from app.db.models import User
+
+    user = await session.get(User, user_id)
+    label = athlete_label(user) if user else f"#{user_id}"
+    since = date.today() - timedelta(days=days - 1)
+    result = await session.execute(
+        select(WorkoutSession)
+        .where(
+            WorkoutSession.user_id == user_id,
+            WorkoutSession.status == SessionStatus.finished,
+            WorkoutSession.session_date >= since,
+        )
+        .options(
+            selectinload(WorkoutSession.template),
+            selectinload(WorkoutSession.sets),
+        )
+        .order_by(WorkoutSession.session_date.desc(), WorkoutSession.id.desc())
+    )
+    sessions = list(result.scalars().all())
+    lines = [f"Неделя · {label}", f"Сессий: {len(sessions)}"]
+    if not sessions:
+        lines.append("Пока пусто.")
+        return "\n".join(lines)
+    total_vol = sum(sum(s.volume for s in ws.sets) for ws in sessions)
+    lines.append(f"Объём: {total_vol:g} кг·повт")
+    lines.append("")
+    stuck: list[str] = []
+    for ws in sessions:
+        title = ws.template.name if ws.template else "Тренировка"
+        lines.append(f"{ws.session_date.isoformat()} · {title}")
+        grouped: dict[str, list] = defaultdict(list)
+        for s in ws.sets:
+            grouped[s.exercise_name].append(s)
+        for name, rows in grouped.items():
+            mains = [r for r in rows if (r.drop_index or 0) == 0] or rows
+            top = max(mains, key=lambda r: float(r.weight))
+            lines.append(f"  {name}: {format_session_exercise(rows)} (раб. {top.weight:g})")
+            if rows[-1].difficulty.value in ("hard", "failure"):
+                stuck.append(f"• {name} ({ws.session_date.isoformat()})")
+    if stuck:
+        lines.append("")
+        lines.append("Тяжело / отказ:")
+        lines.extend(stuck)
+    return "\n".join(lines)
+
+
+async def list_athletes_missing_today(
+    session: AsyncSession,
+    day,
+    *,
+    template_id: int | None,
+) -> list:
+    from app.db.models import User
+
+    users = list(
+        (
+            await session.execute(select(User).where(User.onboarding_done.is_(True)))
+        ).scalars().all()
+    )
+    q = select(WorkoutSession.user_id).where(
+        WorkoutSession.session_date == day,
+        WorkoutSession.status == SessionStatus.finished,
+    )
+    if template_id is not None:
+        q = q.where(WorkoutSession.template_id == template_id)
+    finished_ids = set((await session.execute(q)).scalars().all())
+    return [u for u in users if u.id not in finished_ids]
+
+
+async def format_missing_today(session: AsyncSession, day, template_id: int | None) -> str:
+    missing = await list_athletes_missing_today(session, day, template_id=template_id)
+    if not missing:
+        return "Все онборждённые уже залогировали сегодня. Красавцы."
+    lines = ["Ещё не залогировали сегодня:"]
+    for u in missing:
+        lines.append(f"• {u.short_code} · {u.display_name}")
     return "\n".join(lines)

@@ -25,6 +25,11 @@ async def _add_missing_columns(conn) -> None:
     if "drop_index" not in cols:
         await conn.execute(text("ALTER TABLE session_sets ADD COLUMN drop_index INTEGER DEFAULT 0"))
 
+    result = await conn.execute(text("PRAGMA table_info(user_exercise_state)"))
+    cols = {row[1] for row in result}
+    if "note" not in cols:
+        await conn.execute(text("ALTER TABLE user_exercise_state ADD COLUMN note TEXT"))
+
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with SessionLocal() as session:

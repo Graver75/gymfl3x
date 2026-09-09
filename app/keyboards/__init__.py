@@ -38,17 +38,75 @@ def phase_kb(current: TrainingPhase) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def workout_mode_kb(*, has_today: bool) -> InlineKeyboardMarkup:
+    rows = []
+    if has_today:
+        rows.append(
+            [InlineKeyboardButton(text="По графику сегодня", callback_data="wo:mode:today")]
+        )
+    rows.append([InlineKeyboardButton(text="Свободная тренировка", callback_data="wo:mode:free")])
+    rows.append([InlineKeyboardButton(text="Отмена", callback_data="wo:cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def workout_templates_kb(templates: list) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=t.name, callback_data=f"wo:tpl:{t.id}")]
+        for t in templates
+    ]
+    rows.append([InlineKeyboardButton(text="Из архива упражнений", callback_data="wo:arch")])
+    rows.append([InlineKeyboardButton(text="« Назад", callback_data="wo:mode:back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def workout_archive_kb(items: list, *, page: int = 0) -> InlineKeyboardMarkup:
+    page_size = 8
+    start = page * page_size
+    chunk = items[start : start + page_size]
+    rows = [
+        [InlineKeyboardButton(text=item.name, callback_data=f"wo:archpick:{item.id}")]
+        for item in chunk
+    ]
+    nav = []
+    pages = max(1, (len(items) + page_size - 1) // page_size) if items else 1
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="‹", callback_data=f"wo:archp:{page - 1}"))
+    if pages > 1:
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{pages}", callback_data="adm:noop"))
+    if page + 1 < pages:
+        nav.append(InlineKeyboardButton(text="›", callback_data=f"wo:archp:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    if not chunk:
+        rows.append([InlineKeyboardButton(text="Архив пуст", callback_data="adm:noop")])
+    rows.append([InlineKeyboardButton(text="Закончить тренировку", callback_data="wo:finish")])
+    rows.append([InlineKeyboardButton(text="« Назад", callback_data="wo:mode:free")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def workout_exercise_kb(
     exercises: list[TemplateExercise],
     done_ids: set[int],
+    *,
+    weight_hints: dict[int, float] | None = None,
+    next_id: int | None = None,
 ) -> InlineKeyboardMarkup:
     rows = []
     for ex in exercises:
-        mark = "✅ " if ex.id in done_ids else ""
+        if ex.id in done_ids:
+            mark = "✅ "
+        elif next_id is not None and ex.id == next_id:
+            mark = "➡️ "
+        else:
+            mark = ""
+        target = f"{ex.target_sets}×{ex.target_reps_min}-{ex.target_reps_max}"
+        hint = ""
+        if weight_hints and ex.id in weight_hints and ex.id not in done_ids:
+            hint = f" · {weight_hints[ex.id]:g}кг"
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{mark}{ex.name}",
+                    text=f"{mark}{ex.name} ({target}){hint}",
                     callback_data=f"wo:ex:{ex.id}",
                 )
             ]
@@ -64,7 +122,6 @@ def weight_kb(
     draft_weight: float | None = None,
     *,
     weight_options: list[float] | None = None,
-    can_repeat_last: bool = False,
 ) -> InlineKeyboardMarkup:
     step = exercise.weight_step or 2.5
     base = draft_weight
@@ -104,10 +161,6 @@ def weight_kb(
             break
     for i in range(0, len(presets), 3):
         buttons.append(presets[i : i + 3])
-    if can_repeat_last:
-        buttons.append(
-            [InlineKeyboardButton(text="Как в прошлый раз", callback_data="wo:repeat_last")]
-        )
     buttons.append([InlineKeyboardButton(text="Ввести вес", callback_data="wo:w:custom")])
     buttons.append([InlineKeyboardButton(text="« Назад", callback_data="wo:back")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -176,6 +229,7 @@ def difficulty_kb() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="Тяжело", callback_data=f"wo:d:{Difficulty.hard.value}"),
                 InlineKeyboardButton(text="Отказ", callback_data=f"wo:d:{Difficulty.failure.value}"),
             ],
+            [InlineKeyboardButton(text="Заметка", callback_data="wo:note")],
             [InlineKeyboardButton(text="« Назад", callback_data="wo:back")],
         ]
     )
@@ -189,6 +243,7 @@ def admin_menu_kb() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="График недели", callback_data="adm:schedule")],
             [InlineKeyboardButton(text="Часы напоминаний", callback_data="adm:hours")],
             [InlineKeyboardButton(text="История атлетов", callback_data="hist:athletes:adm")],
+            [InlineKeyboardButton(text="Кто не залогировал", callback_data="adm:missing")],
             [InlineKeyboardButton(text="Пользователи", callback_data="adm:users")],
         ]
     )
@@ -353,11 +408,14 @@ def history_home_kb(*, is_admin: bool = False, viewing_other: bool = False) -> I
         [InlineKeyboardButton(text="По упражнениям", callback_data="hist:exercises")],
     ]
     if viewing_other:
+        rows.append([InlineKeyboardButton(text="Сводка за неделю", callback_data="hist:week")])
         rows.append([InlineKeyboardButton(text="« К атлетам", callback_data="hist:athletes")])
-    elif is_admin:
-        rows.append(
-            [InlineKeyboardButton(text="Чужая история", callback_data="hist:athletes")]
-        )
+    else:
+        rows.append([InlineKeyboardButton(text="Править последнюю", callback_data="hist:editlast")])
+        if is_admin:
+            rows.append(
+                [InlineKeyboardButton(text="Чужая история", callback_data="hist:athletes")]
+            )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -438,6 +496,41 @@ def history_exercises_kb(names: list[str], page: int = 0, *, back: str = "hist:h
         rows.append([InlineKeyboardButton(text="Пока пусто", callback_data="adm:noop")])
     rows.append([InlineKeyboardButton(text="« Назад", callback_data=back)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def history_session_detail_kb(session_id: int, *, can_edit: bool, back: str = "hist:sessions") -> InlineKeyboardMarkup:
+    rows = []
+    if can_edit:
+        rows.append(
+            [InlineKeyboardButton(text="Править подходы", callback_data=f"hist:edit:{session_id}")]
+        )
+    rows.append([InlineKeyboardButton(text="« Назад", callback_data=back)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def history_edit_sets_kb(sets: list, session_id: int) -> InlineKeyboardMarkup:
+    rows = []
+    for s in sets:
+        drop = f" d{s.drop_index}" if (s.drop_index or 0) else ""
+        label = f"#{s.set_number}{drop}: {s.reps}×{s.weight:g} · {s.exercise_name}"
+        rows.append(
+            [InlineKeyboardButton(text=label[:64], callback_data=f"hist:es:{s.id}")]
+        )
+    if not rows:
+        rows.append([InlineKeyboardButton(text="Пусто", callback_data="adm:noop")])
+    rows.append([InlineKeyboardButton(text="« К тренировке", callback_data=f"hist:s:{session_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def history_edit_set_kb(set_id: int, session_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Изменить вес", callback_data=f"hist:ew:{set_id}")],
+            [InlineKeyboardButton(text="Изменить повторы", callback_data=f"hist:er:{set_id}")],
+            [InlineKeyboardButton(text="Удалить подход", callback_data=f"hist:edel:{set_id}")],
+            [InlineKeyboardButton(text="« К подходам", callback_data=f"hist:edit:{session_id}")],
+        ]
+    )
 
 
 def history_back_kb(to: str = "hist:home") -> InlineKeyboardMarkup:

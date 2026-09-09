@@ -11,12 +11,16 @@ from app.filters import PrivateChat
 from app.keyboards import (
     history_athletes_kb,
     history_back_kb,
+    history_edit_set_kb,
+    history_edit_sets_kb,
     history_exercises_kb,
     history_home_kb,
+    history_session_detail_kb,
     history_sessions_kb,
 )
 from app.services.history import (
     athlete_label,
+    format_athlete_week,
     format_exercise_history,
     format_session_history,
     get_athlete,
@@ -25,6 +29,8 @@ from app.services.history import (
     list_recent_sessions,
     list_user_exercise_names,
 )
+from app.db.models import SessionSet
+from app.states import EditSessionSG
 from app.services.users import get_or_create_user
 
 router = Router(name="history")
@@ -232,9 +238,12 @@ async def hist_session_detail(callback: CallbackQuery, state: FSMContext) -> Non
         text = format_session_history(ws)
         if viewing_other:
             text = f"{label}\n{text}"
+    can_edit = (not viewing_other) or viewer.is_admin
     await callback.message.edit_text(
         text,
-        reply_markup=history_back_kb("hist:sessions"),
+        reply_markup=history_session_detail_kb(
+            session_id, can_edit=can_edit, back="hist:sessions"
+        ),
     )
     await callback.answer()
 
@@ -295,3 +304,215 @@ async def hist_exercise_detail(callback: CallbackQuery, state: FSMContext) -> No
         reply_markup=history_back_kb(f"hist:ep:{page}"),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data == "hist:week")
+async def hist_week(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None:
+        return
+    viewer = await _viewer(callback)
+    if not viewer or not viewer.is_admin:
+        await callback.answer("Только для админа", show_alert=True)
+        return
+    target_id, label, viewing_other = await _target_context(state, viewer)
+    if not viewing_other:
+        await callback.answer("Сначала выбери атлета", show_alert=True)
+        return
+    async with SessionLocal() as session:
+        text = await format_athlete_week(session, target_id, days=7)
+    await callback.message.edit_text(text, reply_markup=history_back_kb("hist:uhome"))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "hist:editlast")
+async def hist_edit_last(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None:
+        return
+    viewer = await _viewer(callback)
+    if not viewer:
+        await callback.answer("Сначала /start", show_alert=True)
+        return
+    target_id, _, viewing_other = await _target_context(state, viewer)
+    if viewing_other and not viewer.is_admin:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    async with SessionLocal() as session:
+        sessions = await list_recent_sessions(session, target_id, limit=1)
+        if not sessions:
+            await callback.answer("Нет завершённых тренировок", show_alert=True)
+            return
+        ws = sessions[0]
+    await state.update_data(edit_session_id=ws.id, hist_target_id=target_id)
+    await _show_edit_sets(callback, state, ws.id)
+
+
+async def _show_edit_sets(callback: CallbackQuery, state: FSMContext, session_id: int) -> None:
+    viewer = await _viewer(callback)
+    target_id, _, _ = await _target_context(state, viewer)
+    async with SessionLocal() as session:
+        ws = await get_user_session(session, target_id, session_id)
+        if not ws:
+            await callback.answer("Не найдено", show_alert=True)
+            return
+        sets = list(ws.sets)
+    await state.set_state(EditSessionSG.pick_set)
+    await state.update_data(edit_session_id=session_id)
+    await callback.message.edit_text(
+        "Выбери подход для правки:",
+        reply_markup=history_edit_sets_kb(sets, session_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("hist:edit:"))
+async def hist_edit_session(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None or callback.data is None:
+        return
+    viewer = await _viewer(callback)
+    if not viewer:
+        return
+    session_id = int(callback.data.split(":")[-1])
+    target_id, _, viewing_other = await _target_context(state, viewer)
+    if viewing_other and not viewer.is_admin:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    # ensure target owns session
+    async with SessionLocal() as session:
+        ws = await get_user_session(session, target_id if viewing_other else viewer.id, session_id)
+        if not ws and not viewing_other:
+            ws = await get_user_session(session, viewer.id, session_id)
+        if not ws:
+            await callback.answer("Не найдено", show_alert=True)
+            return
+        await state.update_data(hist_target_id=ws.user_id)
+    await _show_edit_sets(callback, state, session_id)
+
+
+@router.callback_query(F.data.startswith("hist:es:"))
+async def hist_edit_set_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None or callback.data is None:
+        return
+    set_id = int(callback.data.split(":")[-1])
+    data = await state.get_data()
+    session_id = data.get("edit_session_id")
+    if not session_id:
+        await callback.answer("Открой правку снова", show_alert=True)
+        return
+    await state.update_data(edit_set_id=set_id)
+    await callback.message.edit_text(
+        "Что изменить?",
+        reply_markup=history_edit_set_kb(set_id, int(session_id)),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("hist:edel:"))
+async def hist_delete_set(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None or callback.data is None:
+        return
+    set_id = int(callback.data.split(":")[-1])
+    viewer = await _viewer(callback)
+    target_id, _, _ = await _target_context(state, viewer)
+    data = await state.get_data()
+    session_id = int(data.get("edit_session_id") or 0)
+    async with SessionLocal() as session:
+        row = await session.get(SessionSet, set_id)
+        if not row or row.session_id != session_id:
+            await callback.answer("Не найдено", show_alert=True)
+            return
+        ws = await get_user_session(session, target_id, session_id)
+        if not ws:
+            await callback.answer("Нет доступа", show_alert=True)
+            return
+        await session.delete(row)
+        await session.commit()
+    await callback.answer("Удалил")
+    await _show_edit_sets(callback, state, session_id)
+
+
+@router.callback_query(F.data.startswith("hist:ew:"))
+async def hist_edit_weight_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None or callback.data is None:
+        return
+    set_id = int(callback.data.split(":")[-1])
+    await state.set_state(EditSessionSG.edit_weight)
+    await state.update_data(edit_set_id=set_id)
+    await callback.message.answer("Новый вес числом, например 52.5")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("hist:er:"))
+async def hist_edit_reps_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None or callback.data is None:
+        return
+    set_id = int(callback.data.split(":")[-1])
+    await state.set_state(EditSessionSG.edit_reps)
+    await state.update_data(edit_set_id=set_id)
+    await callback.message.answer("Новые повторения целым числом")
+    await callback.answer()
+
+
+@router.message(EditSessionSG.edit_weight)
+async def hist_edit_weight_save(message: Message, state: FSMContext) -> None:
+    try:
+        weight = float((message.text or "").replace(",", "."))
+        if weight < 0 or weight > 500:
+            raise ValueError
+    except ValueError:
+        await message.answer("Число кг, например 40.")
+        return
+    data = await state.get_data()
+    set_id = data.get("edit_set_id")
+    session_id = data.get("edit_session_id")
+    viewer = await _viewer(message)
+    target_id, _, _ = await _target_context(state, viewer)
+    async with SessionLocal() as session:
+        row = await session.get(SessionSet, set_id)
+        if not row:
+            await message.answer("Подход не найден.")
+            return
+        row.weight = weight
+        row.volume = max(int(row.reps), 1) * weight * max(int(row.sets_count), 1)
+        await session.commit()
+    await state.set_state(EditSessionSG.pick_set)
+    await message.answer(f"Вес обновлён: {weight:g} кг. Открой список подходов кнопкой ниже или /history.")
+    # re-show via a fake - send edit sets as new message
+    async with SessionLocal() as session:
+        ws = await get_user_session(session, target_id, int(session_id))
+        sets = list(ws.sets) if ws else []
+    await message.answer(
+        "Выбери подход для правки:",
+        reply_markup=history_edit_sets_kb(sets, int(session_id)),
+    )
+
+
+@router.message(EditSessionSG.edit_reps)
+async def hist_edit_reps_save(message: Message, state: FSMContext) -> None:
+    try:
+        reps = int((message.text or "").strip())
+        if reps < 0 or reps > 200:
+            raise ValueError
+    except ValueError:
+        await message.answer("Целое число повторений.")
+        return
+    data = await state.get_data()
+    set_id = data.get("edit_set_id")
+    session_id = data.get("edit_session_id")
+    viewer = await _viewer(message)
+    target_id, _, _ = await _target_context(state, viewer)
+    async with SessionLocal() as session:
+        row = await session.get(SessionSet, set_id)
+        if not row:
+            await message.answer("Подход не найден.")
+            return
+        row.reps = reps
+        row.volume = max(reps, 1) * float(row.weight) * max(int(row.sets_count), 1)
+        await session.commit()
+    await state.set_state(EditSessionSG.pick_set)
+    async with SessionLocal() as session:
+        ws = await get_user_session(session, target_id, int(session_id))
+        sets = list(ws.sets) if ws else []
+    await message.answer(
+        f"Повторы обновлены: {reps}.",
+        reply_markup=history_edit_sets_kb(sets, int(session_id)),
+    )

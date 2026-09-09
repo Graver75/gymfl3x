@@ -13,6 +13,7 @@ from app.config import Settings
 from app.db.models import GroupChat, RecapSent, ScheduleDay, WorkoutTemplate
 from app.db.session import SessionLocal
 from app.services.recap import build_group_recap
+from app.services.history import format_missing_today
 
 
 WEEKDAY_NAMES = (
@@ -112,6 +113,9 @@ async def send_evening_recaps(bot: Bot, settings: Settings) -> None:
             await session.execute(select(GroupChat).where(GroupChat.active.is_(True)))
         ).scalars().all()
         text = await build_group_recap(session, template, today)
+        missing = await format_missing_today(session, today, template.id)
+        if not missing.startswith("Все онборждённые"):
+            text = f"{missing}\n\n{text}"
 
         for group in groups:
             hour = group.recap_hour if group.recap_hour is not None else settings.recap_hour
