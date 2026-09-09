@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -12,17 +13,15 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.config import get_settings
 from app.db.session import init_db
 from app.handlers import setup_routers
+from app.logging_setup import setup_logging
 from app.services.reminders import send_evening_recaps, send_morning_reminders
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
 logger = logging.getLogger("gymflex")
 
 
 async def main() -> None:
     settings = get_settings()
+    setup_logging(settings)
     await init_db()
 
     bot = Bot(
@@ -54,12 +53,24 @@ async def main() -> None:
 
     try:
         await bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Bot polling…")
+        me = await bot.get_me()
+        logger.info("Bot polling as @%s (id=%s)", me.username, me.id)
         await dp.start_polling(bot)
     finally:
+        logger.info("Shutting down")
         scheduler.shutdown(wait=False)
         await bot.session.close()
 
 
+def run() -> None:
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Stopped by keyboard")
+    except Exception:
+        logging.getLogger("gymflex").exception("Fatal error, process exiting")
+        sys.exit(1)
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    run()

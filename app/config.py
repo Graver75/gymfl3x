@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     )
     reminder_hour: int = Field(default=8, alias="REMINDER_HOUR")
     recap_hour: int = Field(default=22, alias="RECAP_HOUR")
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    log_file: str = Field(default="logs/gymflex.log", alias="LOG_FILE")
+    log_max_bytes: int = Field(default=2_000_000, alias="LOG_MAX_BYTES")
+    log_backup_count: int = Field(default=5, alias="LOG_BACKUP_COUNT")
 
     @field_validator("admin_telegram_ids", mode="before")
     @classmethod

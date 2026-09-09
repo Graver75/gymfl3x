@@ -74,6 +74,32 @@ python -m app.main
 4. Так по всем упражнениям → «Закончить тренировку»
 5. Вечером в чат уходит общая сводка
 
+## Деплой на сервер (systemd + логи)
+
+Автоперезапуск делает systemd (`Restart=always`). Ошибки пишутся в `logs/gymflex.log` (ротация) и в journal.
+
+```bash
+cd /root/gymfl3x
+# venv у нас: app/venv
+sudo cp deploy/gymflex.service /etc/systemd/system/gymflex.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now gymflex
+```
+
+Логи:
+
+```bash
+journalctl -u gymflex -n 100 --no-pager
+tail -n 100 /root/gymfl3x/logs/gymflex.log
+```
+
+Статус / рестарт:
+
+```bash
+systemctl status gymflex --no-pager
+systemctl restart gymflex
+```
+
 ## Стек
 
 Python 3.12+, aiogram 3, SQLAlchemy 2 + SQLite (aiosqlite), APScheduler.
