@@ -5,7 +5,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db.models import User
+from app.services.metrics_log import log_body_weight
 from app.services.progression import phase_from_experience
+
+
+def can_open_admin(user: User) -> bool:
+    return bool(user.is_admin or getattr(user, "is_program_admin", False))
 
 
 async def get_or_create_user(
@@ -62,6 +67,7 @@ async def apply_onboarding(
     user.experience_months = experience_months
     user.phase = phase_from_experience(experience_months)
     user.onboarding_done = True
+    await log_body_weight(session, user.id, body_weight)
     await session.commit()
     await session.refresh(user)
     return user

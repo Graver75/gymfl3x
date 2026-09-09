@@ -25,9 +25,11 @@ from app.db.session import SessionLocal
 from app.filters import PrivateChat
 from app.keyboards import (
     admin_menu_kb,
+    admin_users_kb,
     archive_item_kb,
     archive_list_kb,
     archive_pick_kb,
+    current_exercises_kb,
     exercise_delete_confirm_kb,
     exercise_edit_kb,
     exercise_move_kb,
@@ -46,21 +48,57 @@ router.message.filter(PrivateChat())
 router.callback_query.filter(PrivateChat())
 
 
-async def _admin_user(telegram_id: int, full_name: str) -> User | None:
+async def _load_staff(telegram_id: int, full_name: str) -> User | None:
+    """Full admin or program admin (templates / archive / schedule / current)."""
     async with SessionLocal() as session:
         user = await get_or_create_user(session, telegram_id, full_name)
         settings = get_settings()
         if telegram_id in settings.admin_telegram_ids and not user.is_admin:
             user.is_admin = True
             await session.commit()
-        if not user.is_admin:
+        if not (user.is_admin or user.is_program_admin):
             return None
         session.expunge(user)
         return user
 
 
+async def _full_admin(telegram_id: int, full_name: str) -> User | None:
+    """Only full admin (hours / users / missing / athletes history)."""
+    user = await _load_staff(telegram_id, full_name)
+    if not user or not user.is_admin:
+        return None
+    return user
+
+
+# Back-compat alias used during migration of call sites
+_admin_user = _load_staff
+
+
 async def _deny(message: Message) -> None:
-    await message.answer("Только для админа.")
+    await message.answer("Нет доступа к админке.")
+
+
+def _ex_back_from_data(data: dict, template_id: int) -> str:
+    back = data.get("ex_back")
+    if back == "adm:current":
+        return "adm:current"
+    return f"adm:tpl:{template_id}"
+
+
+async def _list_current_exercises(session) -> list[tuple[int, str]]:
+    result = await session.execute(
+        select(TemplateExercise, WorkoutTemplate)
+        .join(WorkoutTemplate, TemplateExercise.template_id == WorkoutTemplate.id)
+        .order_by(WorkoutTemplate.name, TemplateExercise.position, TemplateExercise.id)
+    )
+    items: list[tuple[int, str]] = []
+    for ex, tpl in result.all():
+        label = (
+            f"{ex.name} · {tpl.name} "
+            f"({ex.target_sets}×{ex.target_reps_min}-{ex.target_reps_max})"
+        )
+        items.append((ex.id, label))
+    return items
 
 
 def _parse_targets(text: str) -> tuple[int, int, int, float] | None:
@@ -125,7 +163,7 @@ def _exercise_text(ex: TemplateExercise, template_name: str) -> str:
 async def admin_home(message: Message, state: FSMContext) -> None:
     if message.from_user is None:
         return
-    user = await _admin_user(
+    user = await _load_staff(
         message.from_user.id,
         message.from_user.full_name or "Admin",
     )
@@ -133,19 +171,25 @@ async def admin_home(message: Message, state: FSMContext) -> None:
         await _deny(message)
         return
     await state.clear()
-    await message.answer(f"{ui.ICO_ADMIN} Админка Gymflex:", reply_markup=admin_menu_kb())
+    await message.answer(
+        f"{ui.ICO_ADMIN} Админка Gymflex:",
+        reply_markup=admin_menu_kb(full=user.is_admin),
+    )
 
 
 @router.callback_query(F.data == "adm:home")
 async def adm_home_cb(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.from_user is None or callback.message is None:
         return
-    user = await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin")
+    user = await _load_staff(callback.from_user.id, callback.from_user.full_name or "Admin")
     if not user:
         await callback.answer("Нет доступа", show_alert=True)
         return
     await state.clear()
-    await callback.message.edit_text(f"{ui.ICO_ADMIN} Админка Gymflex:", reply_markup=admin_menu_kb())
+    await callback.message.edit_text(
+        f"{ui.ICO_ADMIN} Админка Gymflex:",
+        reply_markup=admin_menu_kb(full=user.is_admin),
+    )
     await callback.answer()
 
 
@@ -433,7 +477,8 @@ async def adm_ex_view(callback: CallbackQuery, state: FSMContext) -> None:
     if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
         await callback.answer("Нет доступа", show_alert=True)
         return
-    await state.clear()
+    data = await state.get_data()
+    preserved = data.get("ex_back")
     ex_id = int(callback.data.split(":")[-1])
     async with SessionLocal() as session:
         ex = await session.get(TemplateExercise, ex_id)
@@ -443,9 +488,11 @@ async def adm_ex_view(callback: CallbackQuery, state: FSMContext) -> None:
         tpl = await session.get(WorkoutTemplate, ex.template_id)
         text = _exercise_text(ex, tpl.name if tpl else "?")
         tpl_id = ex.template_id
+    back = preserved if preserved == "adm:current" else f"adm:tpl:{tpl_id}"
+    await state.update_data(ex_back=back)
     await callback.message.edit_text(
         text,
-        reply_markup=exercise_edit_kb(ex_id, tpl_id),
+        reply_markup=exercise_edit_kb(ex_id, tpl_id, back=back),
     )
     await callback.answer()
 
@@ -458,8 +505,9 @@ async def adm_ex_rename_start(callback: CallbackQuery, state: FSMContext) -> Non
         await callback.answer("Нет доступа", show_alert=True)
         return
     ex_id = int(callback.data.split(":")[-1])
+    data = await state.get_data()
     await state.set_state(AdminSG.edit_exercise_name)
-    await state.update_data(exercise_id=ex_id)
+    await state.update_data(exercise_id=ex_id, ex_back=data.get("ex_back"))
     await callback.message.answer("Новое название упражнения:")
     await callback.answer()
 
@@ -497,8 +545,13 @@ async def adm_ex_rename_save(message: Message, state: FSMContext) -> None:
         tpl_name = tpl.name if tpl else "?"
         tpl_id = ex.template_id
         text = _exercise_text(ex, tpl_name)
+    back = _ex_back_from_data(data, tpl_id)
     await state.clear()
-    await message.answer(f"Название обновлено.\n\n{text}", reply_markup=exercise_edit_kb(ex_id, tpl_id))
+    await state.update_data(ex_back=back)
+    await message.answer(
+        f"Название обновлено.\n\n{text}",
+        reply_markup=exercise_edit_kb(ex_id, tpl_id, back=back),
+    )
 
 
 @router.callback_query(F.data.startswith("adm:ex:tgt:"))
@@ -509,8 +562,9 @@ async def adm_ex_targets_start(callback: CallbackQuery, state: FSMContext) -> No
         await callback.answer("Нет доступа", show_alert=True)
         return
     ex_id = int(callback.data.split(":")[-1])
+    data = await state.get_data()
     await state.set_state(AdminSG.edit_exercise_targets)
-    await state.update_data(exercise_id=ex_id)
+    await state.update_data(exercise_id=ex_id, ex_back=data.get("ex_back"))
     await callback.message.answer(
         "Новые цели: подходы повторы_мин повторы_макс [шаг_кг]\n"
         "Пример: 4 8 12 2.5"
@@ -555,18 +609,25 @@ async def adm_ex_targets_save(message: Message, state: FSMContext) -> None:
         tpl_name = tpl.name if tpl else "?"
         tpl_id = ex.template_id
         text = _exercise_text(ex, tpl_name)
+    back = _ex_back_from_data(data, tpl_id)
     await state.clear()
-    await message.answer(f"Цели обновлены.\n\n{text}", reply_markup=exercise_edit_kb(ex_id, tpl_id))
+    await state.update_data(ex_back=back)
+    await message.answer(
+        f"Цели обновлены.\n\n{text}",
+        reply_markup=exercise_edit_kb(ex_id, tpl_id, back=back),
+    )
 
 
 @router.callback_query(F.data.startswith("adm:ex:delok:"))
-async def adm_ex_delete_ok(callback: CallbackQuery) -> None:
+async def adm_ex_delete_ok(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.data is None or callback.from_user is None or callback.message is None:
         return
     if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
         await callback.answer("Нет доступа", show_alert=True)
         return
     ex_id = int(callback.data.split(":")[-1])
+    data = await state.get_data()
+    back = data.get("ex_back")
     async with SessionLocal() as session:
         ex = await session.get(TemplateExercise, ex_id)
         if not ex:
@@ -594,21 +655,31 @@ async def adm_ex_delete_ok(callback: CallbackQuery) -> None:
         await session.flush()
         await _reindex_positions(session, tpl_id)
         await session.commit()
-        tpl = await _load_template(session, tpl_id)
-    text = f"Удалено: {name}\n\n" + (_template_text(tpl) if tpl else "Шаблон не найден.")
-    kb = template_detail_kb(tpl_id, tpl.exercises if tpl else None)
+        if back == "adm:current":
+            items = await _list_current_exercises(session)
+            text = f"Удалено: {name}\n\n{ui.BTN_ADM_CURRENT}"
+            kb = current_exercises_kb(items)
+        else:
+            tpl = await _load_template(session, tpl_id)
+            text = f"Удалено: {name}\n\n" + (_template_text(tpl) if tpl else "Шаблон не найден.")
+            kb = template_detail_kb(tpl_id, tpl.exercises if tpl else None)
     await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer("Удалено")
 
 
 @router.callback_query(F.data.startswith("adm:ex:del:"))
-async def adm_ex_delete_ask(callback: CallbackQuery) -> None:
+async def adm_ex_delete_ask(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.data is None or callback.from_user is None or callback.message is None:
         return
     if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
         await callback.answer("Нет доступа", show_alert=True)
         return
+    # Avoid matching adm:ex:delok:
+    if ":delok:" in callback.data:
+        return
     ex_id = int(callback.data.split(":")[-1])
+    data = await state.get_data()
+    back = data.get("ex_back")
     async with SessionLocal() as session:
         ex = await session.get(TemplateExercise, ex_id)
         if not ex:
@@ -618,7 +689,7 @@ async def adm_ex_delete_ask(callback: CallbackQuery) -> None:
         name = ex.name
     await callback.message.edit_text(
         f"Удалить «{name}» из шаблона? Логи прошлых тренировок останутся.",
-        reply_markup=exercise_delete_confirm_kb(ex_id, tpl_id),
+        reply_markup=exercise_delete_confirm_kb(ex_id, tpl_id, back=back),
     )
     await callback.answer()
 
@@ -889,7 +960,7 @@ async def adm_sch_clear(callback: CallbackQuery) -> None:
 async def adm_hours(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.from_user is None or callback.message is None:
         return
-    if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
+    if not await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin"):
         await callback.answer("Нет доступа", show_alert=True)
         return
     settings = get_settings()
@@ -910,7 +981,7 @@ async def adm_hours(callback: CallbackQuery, state: FSMContext) -> None:
 async def adm_set_hours(message: Message, state: FSMContext) -> None:
     if message.from_user is None:
         return
-    if not await _admin_user(message.from_user.id, message.from_user.full_name or "Admin"):
+    if not await _full_admin(message.from_user.id, message.from_user.full_name or "Admin"):
         return
     parts = (message.text or "").split()
     try:
@@ -941,7 +1012,7 @@ async def adm_set_hours(message: Message, state: FSMContext) -> None:
 async def adm_missing_today(callback: CallbackQuery) -> None:
     if callback.from_user is None or callback.message is None:
         return
-    if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
+    if not await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin"):
         await callback.answer("Нет доступа", show_alert=True)
         return
     settings = get_settings()
@@ -955,7 +1026,11 @@ async def adm_missing_today(callback: CallbackQuery) -> None:
         text = await format_missing_today(
             session, today, template.id if template else None
         )
-    await callback.message.edit_text(text, reply_markup=admin_menu_kb())
+        user = await get_or_create_user(
+            session, callback.from_user.id, callback.from_user.full_name or "Admin"
+        )
+        full = user.is_admin
+    await callback.message.edit_text(text, reply_markup=admin_menu_kb(full=full))
     await callback.answer()
 
 
@@ -963,19 +1038,126 @@ async def adm_missing_today(callback: CallbackQuery) -> None:
 async def adm_users(callback: CallbackQuery) -> None:
     if callback.from_user is None or callback.message is None:
         return
-    if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
+    if not await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin"):
         await callback.answer("Нет доступа", show_alert=True)
         return
     async with SessionLocal() as session:
-        users = (await session.execute(select(User).order_by(User.id))).scalars().all()
-    if not users:
-        text = "Пользователей пока нет."
-    else:
-        lines = [f"{ui.BTN_ADM_USERS}:"]
-        for u in users:
-            flag = " [admin]" if u.is_admin else ""
-            done = "✓" if u.onboarding_done else "…"
-            lines.append(f"{done} {u.short_code} {u.display_name}{flag} (tg:{u.telegram_id})")
-        text = "\n".join(lines)
-    await callback.message.edit_text(text, reply_markup=admin_menu_kb())
+        users = list((await session.execute(select(User).order_by(User.id))).scalars().all())
+    await callback.message.edit_text(
+        f"{ui.BTN_ADM_USERS}\n"
+        "Нажми строку — включить/выключить доступ к программе "
+        "(шаблоны, текущие упражнения, архив, график).\n"
+        "⭐ admin — полный доступ из ADMIN_TELEGRAM_IDS.",
+        reply_markup=admin_users_kb(users),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:u:prog:"))
+async def adm_toggle_program_admin(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.from_user is None or callback.message is None:
+        return
+    if not await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    user_id = int(callback.data.split(":")[-1])
+    async with SessionLocal() as session:
+        target = await session.get(User, user_id)
+        if not target:
+            await callback.answer("Не найден", show_alert=True)
+            return
+        if target.is_admin:
+            await callback.answer("Это полный админ", show_alert=True)
+            return
+        target.is_program_admin = not bool(target.is_program_admin)
+        await session.commit()
+        users = list((await session.execute(select(User).order_by(User.id))).scalars().all())
+        state = "включён" if target.is_program_admin else "выключен"
+        name = target.display_name
+    await callback.message.edit_text(
+        f"{ui.BTN_ADM_USERS}\n"
+        f"{name}: доступ к программе {state}.\n"
+        "Нажми строку — включить/выключить.\n"
+        "⭐ admin — полный доступ из ADMIN_TELEGRAM_IDS.",
+        reply_markup=admin_users_kb(users),
+    )
+    await callback.answer(f"Программа: {state}")
+
+
+@router.callback_query(F.data == "adm:current")
+@router.callback_query(F.data.startswith("adm:cur:p:"))
+async def adm_current_exercises(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not await _load_staff(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await state.update_data(ex_back="adm:current")
+    page = 0
+    if callback.data and callback.data.startswith("adm:cur:p:"):
+        page = int(callback.data.split(":")[-1])
+    async with SessionLocal() as session:
+        items = await _list_current_exercises(session)
+    await callback.message.edit_text(
+        f"{ui.BTN_ADM_CURRENT}\n"
+        "Все упражнения из шаблонов. Нажми — править имя, цели, перенести или удалить.",
+        reply_markup=current_exercises_kb(items, page=page),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:cur:ex:"))
+async def adm_current_ex_open(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.data is None or callback.from_user is None or callback.message is None:
+        return
+    if not await _load_staff(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    ex_id = int(callback.data.split(":")[-1])
+    await state.update_data(ex_back="adm:current")
+    async with SessionLocal() as session:
+        ex = await session.get(TemplateExercise, ex_id)
+        if not ex:
+            await callback.answer("Упражнение удалено", show_alert=True)
+            return
+        tpl = await session.get(WorkoutTemplate, ex.template_id)
+        text = _exercise_text(ex, tpl.name if tpl else "?")
+        tpl_id = ex.template_id
+    await callback.message.edit_text(
+        text,
+        reply_markup=exercise_edit_kb(ex_id, tpl_id, back="adm:current"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "adm:snapshot")
+async def adm_snapshot(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    user = await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin")
+    if not user:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    import json
+
+    from app.services.athlete_features import build_athlete_snapshot
+
+    async with SessionLocal() as session:
+        snap = await build_athlete_snapshot(session, user.id, days=60)
+    adh = snap.get("adherence") or {}
+    lines = [
+        f"{ui.BTN_ADM_SNAPSHOT} (твой профиль, 60 дней)",
+        f"Сессий: {adh.get('finished_sessions', 0)}",
+        f"По графику: {adh.get('logged_on_schedule', 0)}/{adh.get('scheduled_days', 0)}",
+        f"Заметок: {len(snap.get('notes_timeline') or [])}",
+        f"BW точек: {len(snap.get('body_weight_series') or [])}",
+        f"Лог: {(snap.get('user') or {}).get('log_level')}",
+        "",
+        "JSON (обрезка):",
+        json.dumps(snap, ensure_ascii=False)[:3500],
+    ]
+    await callback.message.edit_text(
+        "\n".join(lines),
+        reply_markup=admin_menu_kb(full=True),
+    )
     await callback.answer()

@@ -10,7 +10,7 @@ from app.db.session import SessionLocal
 from app.filters import PrivateChat
 from app.keyboards import main_menu, skip_kb
 from app.services.progression import PHASE_LABELS
-from app.services.users import apply_onboarding, get_or_create_user
+from app.services.users import apply_onboarding, can_open_admin, get_or_create_user
 from app.states import OnboardingSG
 
 router = Router(name="start")
@@ -38,7 +38,7 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
             f"Код в сводке: {user.short_code}\n"
             f"Фаза: {PHASE_LABELS[user.phase]}"
         )
-        await message.answer(text, reply_markup=main_menu(user.is_admin))
+        await message.answer(text, reply_markup=main_menu(show_admin=can_open_admin(user)))
         if payload == "workout":
             await message.answer(f"Жми «{ui.BTN_WORKOUT}», чтобы начать лог.")
         return
@@ -158,5 +158,5 @@ async def onb_experience(message: Message, state: FSMContext) -> None:
         f"Фазу можно сменить в {ui.BTN_PROFILE}.\n"
         "Админ задаёт общую программу — она read-only для остальных.\n\n"
         "Команды: /today /program /profile /admin",
-        reply_markup=main_menu(user.is_admin),
+        reply_markup=main_menu(show_admin=can_open_admin(user)),
     )

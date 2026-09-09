@@ -18,9 +18,13 @@ class WorkoutSG(StatesGroup):
     custom_weight = State()
     reps = State()
     custom_reps = State()
+    set_rpe = State()
     after_set = State()
     difficulty = State()
     note = State()
+    checkin_energy = State()
+    checkin_sleep = State()
+    checkin_pain = State()
 
 
 class EditSessionSG(StatesGroup):

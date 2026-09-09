@@ -43,6 +43,12 @@ class SessionStatus(str, enum.Enum):
     skipped = "skipped"
 
 
+class LogLevel(str, enum.Enum):
+    minimal = "minimal"
+    standard = "standard"
+    detailed = "detailed"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -57,12 +63,19 @@ class User(Base):
         Enum(TrainingPhase),
         default=TrainingPhase.honeymoon,
     )
+    log_level: Mapped[LogLevel] = mapped_column(
+        Enum(LogLevel),
+        default=LogLevel.minimal,
+    )
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_program_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     onboarding_done: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     exercise_states: Mapped[list[UserExerciseState]] = relationship(back_populates="user")
     sessions: Mapped[list[WorkoutSession]] = relationship(back_populates="user")
+    body_weight_logs: Mapped[list[BodyWeightLog]] = relationship(back_populates="user")
+    note_logs: Mapped[list[ExerciseNoteLog]] = relationship(back_populates="user")
 
 
 class GroupChat(Base):
@@ -157,6 +170,9 @@ class WorkoutSession(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    energy_1_5: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sleep_1_5: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pain_1_5: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     user: Mapped[User] = relationship(back_populates="sessions")
     template: Mapped[WorkoutTemplate | None] = relationship()
@@ -181,10 +197,41 @@ class SessionSet(Base):
     volume: Mapped[float] = mapped_column(Float)  # reps * weight * sets
     set_number: Mapped[int] = mapped_column(Integer, default=0)
     drop_index: Mapped[int] = mapped_column(Integer, default=0)
+    rpe_1_10: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     session: Mapped[WorkoutSession] = relationship(back_populates="sets")
     exercise: Mapped[TemplateExercise | None] = relationship()
+
+
+class BodyWeightLog(Base):
+    __tablename__ = "body_weight_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    weight: Mapped[float] = mapped_column(Float)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user: Mapped[User] = relationship(back_populates="body_weight_logs")
+
+
+class ExerciseNoteLog(Base):
+    __tablename__ = "exercise_note_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    exercise_id: Mapped[int | None] = mapped_column(
+        ForeignKey("template_exercises.id", ondelete="SET NULL"), nullable=True
+    )
+    exercise_name: Mapped[str] = mapped_column(String(128))
+    session_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sessions.id", ondelete="SET NULL"), nullable=True
+    )
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cleared: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user: Mapped[User] = relationship(back_populates="note_logs")
 
 
 class ExerciseArchive(Base):

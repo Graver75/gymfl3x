@@ -6,12 +6,13 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from app import ui_copy as ui
-from app.db.models import TrainingPhase
+from app.db.models import LogLevel, TrainingPhase
 from app.db.session import SessionLocal
 from app.filters import PrivateChat
-from app.keyboards import main_menu, phase_kb
+from app.keyboards import main_menu, profile_kb
+from app.services.metrics_log import log_body_weight
 from app.services.progression import PHASE_LABELS, phase_from_experience
-from app.services.users import get_or_create_user
+from app.services.users import can_open_admin, get_or_create_user
 from app.states import ProfileSG
 
 router = Router(name="profile")
@@ -34,9 +35,23 @@ async def _require_user(message: Message):
         return user
 
 
+def _log_level_label(level: LogLevel | str | None) -> str:
+    value = level.value if isinstance(level, LogLevel) else (level or LogLevel.minimal.value)
+    name = ui.LOG_LEVEL_LABELS.get(value, value)
+    hint = ui.LOG_LEVEL_HINTS.get(value, "")
+    return f"{name} ({hint})" if hint else name
+
+
 def _profile_text(user) -> str:
     height = f"{user.height_cm:g} см" if user.height_cm else "—"
     months = user.experience_months if user.experience_months is not None else "—"
+    if user.is_admin:
+        role = "полный админ"
+    elif user.is_program_admin:
+        role = "админ программы"
+    else:
+        role = "нет"
+    log_level = getattr(user, "log_level", None) or LogLevel.minimal
     return (
         f"{ui.BTN_PROFILE}\n"
         f"Имя: {user.display_name}\n"
@@ -45,7 +60,8 @@ def _profile_text(user) -> str:
         f"Рост: {height}\n"
         f"Стаж: {months} мес\n"
         f"Фаза: {PHASE_LABELS[user.phase]}\n"
-        f"Админ: {'да' if user.is_admin else 'нет'}"
+        f"Лог: {_log_level_label(log_level)}\n"
+        f"Админка: {role}"
     )
 
 
@@ -56,11 +72,11 @@ async def show_profile(message: Message, state: FSMContext) -> None:
     user = await _require_user(message)
     if not user:
         return
+    log_level = getattr(user, "log_level", None) or LogLevel.minimal
     await message.answer(
-        _profile_text(user) + "\n\nСменить фазу — кнопки ниже.\n"
-        "Чтобы обновить вес: /weight\n"
-        "Стаж: /experience",
-        reply_markup=phase_kb(user.phase),
+        _profile_text(user) + "\n\nФаза и детализация лога — кнопки ниже.\n"
+        "Вес: /weight · Стаж: /experience",
+        reply_markup=profile_kb(user.phase, log_level),
     )
 
 
@@ -83,13 +99,45 @@ async def set_phase(callback: CallbackQuery) -> None:
         )
         user.phase = phase
         await session.commit()
+        log_level = getattr(user, "log_level", None) or LogLevel.minimal
+        text = _profile_text(user)
 
     if callback.message:
         await callback.message.edit_text(
-            f"Фаза: {PHASE_LABELS[phase]}",
-            reply_markup=phase_kb(phase),
+            text + "\n\nФаза и детализация лога — кнопки ниже.",
+            reply_markup=profile_kb(phase, log_level),
         )
-    await callback.answer("Сохранено")
+    await callback.answer("Фаза сохранена")
+
+
+@router.callback_query(F.data.startswith("profile:log:"))
+async def set_log_level(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.data is None:
+        return
+    raw = callback.data.split(":")[-1]
+    try:
+        level = LogLevel(raw)
+    except ValueError:
+        await callback.answer("Неизвестный уровень")
+        return
+
+    async with SessionLocal() as session:
+        user = await get_or_create_user(
+            session,
+            callback.from_user.id,
+            callback.from_user.full_name or "Athlete",
+        )
+        user.log_level = level
+        await session.commit()
+        text = _profile_text(user)
+        phase = user.phase
+
+    if callback.message:
+        await callback.message.edit_text(
+            text + "\n\nФаза и детализация лога — кнопки ниже.",
+            reply_markup=profile_kb(phase, level),
+        )
+    await callback.answer(f"Лог: {ui.LOG_LEVEL_LABELS.get(level.value, level.value)}")
 
 
 @router.message(Command("weight"))
@@ -119,10 +167,14 @@ async def save_weight(message: Message, state: FSMContext) -> None:
             message.from_user.full_name or "Athlete",
         )
         user.body_weight = weight
+        await log_body_weight(session, user.id, weight)
         await session.commit()
-        is_admin = user.is_admin
+        show_admin = can_open_admin(user)
     await state.clear()
-    await message.answer(f"Вес обновлён: {weight:g} кг", reply_markup=main_menu(is_admin))
+    await message.answer(
+        f"Вес обновлён: {weight:g} кг",
+        reply_markup=main_menu(show_admin=show_admin),
+    )
 
 
 @router.message(Command("experience"))
@@ -155,9 +207,9 @@ async def save_experience(message: Message, state: FSMContext) -> None:
         user.phase = phase_from_experience(months)
         await session.commit()
         phase = user.phase
-        is_admin = user.is_admin
+        show_admin = can_open_admin(user)
     await state.clear()
     await message.answer(
         f"Стаж: {months} мес, фаза: {PHASE_LABELS[phase]}",
-        reply_markup=main_menu(is_admin),
+        reply_markup=main_menu(show_admin=show_admin),
     )

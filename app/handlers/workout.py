@@ -14,6 +14,7 @@ from app.config import get_settings
 from app.db.models import (
     Difficulty,
     ExerciseArchive,
+    LogLevel,
     SessionSet,
     SessionStatus,
     TemplateExercise,
@@ -29,6 +30,8 @@ from app.keyboards import (
     difficulty_kb,
     main_menu,
     reps_kb,
+    rpe_kb,
+    scale_1_5_kb,
     weight_kb,
     workout_archive_kb,
     workout_exercise_kb,
@@ -42,6 +45,7 @@ from app.services.history import (
     exercise_personal_records,
     format_pr_line,
 )
+from app.services.metrics_log import log_exercise_note
 from app.services.progression import (
     DIFFICULTY_LABELS,
     format_logged_parts,
@@ -49,7 +53,7 @@ from app.services.progression import (
 )
 from app.services.recap import build_personal_retrospective
 from app.services.reminders import WEEKDAY_NAMES, get_template_for_weekday
-from app.services.users import get_or_create_user
+from app.services.users import can_open_admin, get_or_create_user
 from app.services.workout_ui import (
     load_template_with_exercises,
     next_exercise_id,
@@ -64,6 +68,16 @@ from app.states import WorkoutSG
 router = Router(name="workout")
 router.message.filter(PrivateChat())
 router.callback_query.filter(PrivateChat())
+
+
+def _user_log_level(user: User) -> LogLevel:
+    level = getattr(user, "log_level", None)
+    if isinstance(level, LogLevel):
+        return level
+    try:
+        return LogLevel(level) if level else LogLevel.minimal
+    except ValueError:
+        return LogLevel.minimal
 
 
 async def _load_user(telegram_id: int, full_name: str) -> User | None:
@@ -643,18 +657,33 @@ async def note_save(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     data = await state.get_data()
     exercise_id = data.get("exercise_id")
+    free = data.get("free_exercise") or {}
+    exercise_name = free.get("name") or "Упражнение"
     note_val = None if text in {"-", "—", ""} else text[:200]
-    if exercise_id:
-        async with SessionLocal() as session:
-            user = await get_or_create_user(
-                session, message.from_user.id, message.from_user.full_name or "Athlete"
-            )
+    cleared = note_val is None
+    async with SessionLocal() as session:
+        user = await get_or_create_user(
+            session, message.from_user.id, message.from_user.full_name or "Athlete"
+        )
+        if exercise_id:
+            ex = await session.get(TemplateExercise, exercise_id)
+            if ex:
+                exercise_name = ex.name
             ex_state = await _get_state(session, user.id, exercise_id)
             if ex_state is None:
                 ex_state = UserExerciseState(user_id=user.id, exercise_id=exercise_id)
                 session.add(ex_state)
             ex_state.note = note_val
-            await session.commit()
+        await log_exercise_note(
+            session,
+            user_id=user.id,
+            exercise_name=exercise_name,
+            text=note_val,
+            cleared=cleared,
+            exercise_id=exercise_id,
+            session_id=data.get("session_id"),
+        )
+        await session.commit()
     logged = data.get("logged") or []
     note_line = f"\nЗаметка: {note_val}" if note_val else "\nЗаметка очищена"
     await state.set_state(WorkoutSG.difficulty)
@@ -768,7 +797,13 @@ async def custom_reps(message: Message, state: FSMContext) -> None:
     except ValueError:
         await message.answer("Целое число повторений, например 11.")
         return
-    await _append_reps_and_continue(message, state, reps)
+    await _append_reps_and_continue(
+        message,
+        state,
+        reps,
+        from_user_id=message.from_user.id,
+        from_user_name=message.from_user.full_name or "Athlete",
+    )
 
 
 @router.callback_query(WorkoutSG.reps, F.data.regexp(r"^wo:r:\d+$"))
@@ -776,7 +811,14 @@ async def pick_reps(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.data is None or callback.message is None or callback.from_user is None:
         return
     reps = int(callback.data.split(":")[-1])
-    await _append_reps_and_continue(callback.message, state, reps, edit=True)
+    await _append_reps_and_continue(
+        callback.message,
+        state,
+        reps,
+        edit=True,
+        from_user_id=callback.from_user.id,
+        from_user_name=callback.from_user.full_name or "Athlete",
+    )
     await callback.answer()
 
 
@@ -786,6 +828,8 @@ async def _append_reps_and_continue(
     reps: int,
     *,
     edit: bool = False,
+    from_user_id: int | None = None,
+    from_user_name: str = "Athlete",
 ) -> None:
     data = await state.get_data()
     logged = list(data.get("logged") or [])
@@ -795,6 +839,7 @@ async def _append_reps_and_continue(
             "drop_index": int(data.get("drop_index") or 0),
             "weight": float(data["draft_weight"]),
             "reps": reps,
+            "rpe": None,
         }
     )
     await state.update_data(
@@ -802,9 +847,29 @@ async def _append_reps_and_continue(
         draft_reps=reps,
         last_action_at=touch_action_iso(),
     )
-    await state.set_state(WorkoutSG.after_set)
-    data = await state.get_data()
 
+    log_level = LogLevel.minimal
+    if from_user_id is not None:
+        async with SessionLocal() as session:
+            user = await get_or_create_user(session, from_user_id, from_user_name)
+            log_level = _user_log_level(user)
+
+    if log_level == LogLevel.detailed:
+        await state.set_state(WorkoutSG.set_rpe)
+        text = f"RPE этого подхода (1–10):\n{format_logged_parts(logged)}"
+        if edit:
+            await target.edit_text(text, reply_markup=rpe_kb())
+        else:
+            await target.answer(text, reply_markup=rpe_kb())
+        return
+
+    await _show_after_set(target, state, edit=edit)
+
+
+async def _show_after_set(target: Message, state: FSMContext, *, edit: bool = False) -> None:
+    data = await state.get_data()
+    logged = data.get("logged") or []
+    await state.set_state(WorkoutSG.after_set)
     async with SessionLocal() as session:
         exercise = await resolve_exercise(session, data)
         target_sets = exercise.target_sets if exercise else 3
@@ -819,6 +884,23 @@ async def _append_reps_and_continue(
         await target.edit_text(text, reply_markup=kb)
     else:
         await target.answer(text, reply_markup=kb)
+
+
+@router.callback_query(WorkoutSG.set_rpe, F.data.startswith("wo:rpe:"))
+async def pick_set_rpe(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.data is None or callback.message is None:
+        return
+    raw = callback.data.split(":")[-1]
+    data = await state.get_data()
+    logged = list(data.get("logged") or [])
+    if logged:
+        if raw == "skip":
+            logged[-1]["rpe"] = None
+        else:
+            logged[-1]["rpe"] = int(raw)
+        await state.update_data(logged=logged)
+    await _show_after_set(callback.message, state, edit=True)
+    await callback.answer()
 
 
 @router.callback_query(WorkoutSG.after_set, F.data == "wo:more")
@@ -999,6 +1081,7 @@ async def pick_difficulty(callback: CallbackQuery, state: FSMContext) -> None:
                     volume=max(r, 1) * w,
                     set_number=int(part["set_number"]),
                     drop_index=int(part["drop_index"]),
+                    rpe_1_10=part.get("rpe"),
                 )
             )
         await upsert_archive(session, exercise.name, overwrite_targets=False)
@@ -1093,6 +1176,27 @@ async def workout_back(callback: CallbackQuery, state: FSMContext) -> None:
             f"Лог: {format_logged_parts(logged)}\nКак в целом прошло упражнение?",
             reply_markup=difficulty_kb(),
         )
+    elif current == WorkoutSG.set_rpe.state:
+        logged = list(data.get("logged") or [])
+        if logged:
+            logged.pop()
+            await state.update_data(logged=logged)
+        await state.set_state(WorkoutSG.reps)
+        async with SessionLocal() as session:
+            exercise = await resolve_exercise(session, data)
+            user = await get_or_create_user(
+                session, callback.from_user.id, callback.from_user.full_name or "Athlete"
+            )
+            ex_state = None
+            if data.get("exercise_id"):
+                ex_state = await _get_state(session, user.id, data["exercise_id"])
+            last_reps = ex_state.last_reps if ex_state else None
+        await callback.message.edit_text(
+            f"{ui.label_exercise(exercise.name)}\n{_set_prompt(data)}\n"
+            f"Вес: {float(data.get('draft_weight') or 20):g} кг"
+            f"{rest_line(data)}\nСколько повторений?",
+            reply_markup=_reps_kb_from_data(exercise, data, last_reps),
+        )
     elif current == WorkoutSG.difficulty.state:
         await state.set_state(WorkoutSG.after_set)
         async with SessionLocal() as session:
@@ -1178,6 +1282,88 @@ async def finish_workout(callback: CallbackQuery, state: FSMContext) -> None:
         user = await get_or_create_user(
             session, callback.from_user.id, callback.from_user.full_name or "Athlete"
         )
+        log_level = _user_log_level(user)
+        ws = await session.get(WorkoutSession, session_id)
+        if not ws:
+            await callback.answer("Сессия не найдена", show_alert=True)
+            await state.clear()
+            return
+
+    if log_level in (LogLevel.standard, LogLevel.detailed):
+        await state.set_state(WorkoutSG.checkin_energy)
+        await state.update_data(
+            checkin_energy=None,
+            checkin_sleep=None,
+            checkin_pain=None,
+        )
+        await callback.message.edit_text(
+            "Чекин перед финишем.\nЭнергия сегодня (1–5):",
+            reply_markup=scale_1_5_kb("wo:chk:energy", skip_label=ui.BTN_CHECKIN_SKIP),
+        )
+        await callback.answer()
+        return
+
+    await _finalize_finished_session(callback, state)
+    await callback.answer()
+
+
+@router.callback_query(WorkoutSG.checkin_energy, F.data.startswith("wo:chk:energy:"))
+async def checkin_energy(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.data is None or callback.message is None:
+        return
+    raw = callback.data.split(":")[-1]
+    if raw == "skip":
+        await _finalize_finished_session(callback, state)
+        await callback.answer()
+        return
+    await state.update_data(checkin_energy=int(raw))
+    await state.set_state(WorkoutSG.checkin_sleep)
+    await callback.message.edit_text(
+        "Сон / восстановление (1–5):",
+        reply_markup=scale_1_5_kb("wo:chk:sleep", skip_label=ui.BTN_SKIP),
+    )
+    await callback.answer()
+
+
+@router.callback_query(WorkoutSG.checkin_sleep, F.data.startswith("wo:chk:sleep:"))
+async def checkin_sleep(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.data is None or callback.message is None:
+        return
+    raw = callback.data.split(":")[-1]
+    if raw != "skip":
+        await state.update_data(checkin_sleep=int(raw))
+    await state.set_state(WorkoutSG.checkin_pain)
+    await callback.message.edit_text(
+        "Боль / дискомфорт (1–5, где 1 = нет):",
+        reply_markup=scale_1_5_kb("wo:chk:pain", skip_label=ui.BTN_SKIP),
+    )
+    await callback.answer()
+
+
+@router.callback_query(WorkoutSG.checkin_pain, F.data.startswith("wo:chk:pain:"))
+async def checkin_pain(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.data is None or callback.message is None:
+        return
+    raw = callback.data.split(":")[-1]
+    if raw != "skip":
+        await state.update_data(checkin_pain=int(raw))
+    await _finalize_finished_session(callback, state)
+    await callback.answer()
+
+
+async def _finalize_finished_session(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None or callback.from_user is None:
+        return
+    data = await state.get_data()
+    session_id = data.get("session_id")
+    if not session_id:
+        await callback.message.answer("Нет активной сессии")
+        return
+
+    async with SessionLocal() as session:
+        user = await get_or_create_user(
+            session, callback.from_user.id, callback.from_user.full_name or "Athlete"
+        )
         result = await session.execute(
             select(WorkoutSession)
             .where(WorkoutSession.id == session_id)
@@ -1189,22 +1375,27 @@ async def finish_workout(callback: CallbackQuery, state: FSMContext) -> None:
         )
         ws = result.scalar_one_or_none()
         if not ws:
-            await callback.answer("Сессия не найдена", show_alert=True)
             await state.clear()
+            await callback.message.answer("Сессия не найдена")
             return
         ws.status = SessionStatus.finished
         ws.finished_at = datetime.now(ZoneInfo(get_settings().timezone))
+        if data.get("checkin_energy") is not None:
+            ws.energy_1_5 = int(data["checkin_energy"])
+        if data.get("checkin_sleep") is not None:
+            ws.sleep_1_5 = int(data["checkin_sleep"])
+        if data.get("checkin_pain") is not None:
+            ws.pain_1_5 = int(data["checkin_pain"])
         await session.commit()
         text = await build_personal_retrospective(session, ws)
-        is_admin = user.is_admin
+        show_admin = can_open_admin(user)
 
     await state.clear()
     await callback.message.edit_text(text)
     await callback.message.answer(
         f"{ui.ICO_DONE} Готово. Сводка уйдёт в общий чат вечером.",
-        reply_markup=main_menu(is_admin),
+        reply_markup=main_menu(show_admin=show_admin),
     )
-    await callback.answer()
 
 
 @router.callback_query(F.data == "wo:cancel")
@@ -1230,9 +1421,9 @@ async def cancel_workout(callback: CallbackQuery, state: FSMContext) -> None:
             elif ws and ws.status == SessionStatus.active:
                 ws.status = SessionStatus.skipped
                 await session.commit()
-        is_admin = user.is_admin
+        show_admin = can_open_admin(user)
     await state.clear()
     await callback.message.edit_text(f"{ui.BTN_CANCEL} Тренировка отменена.")
-    await callback.message.answer("Меню:", reply_markup=main_menu(is_admin))
+    await callback.message.answer("Меню:", reply_markup=main_menu(show_admin=show_admin))
     await callback.answer()
 

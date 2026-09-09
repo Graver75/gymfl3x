@@ -24,6 +24,20 @@ BTN_EX_DONE = "✅ Готово по упражнению"
 BTN_UNDO_SET = "↩️ Отменить последний подход"
 BTN_NOTE = "📝 Заметка"
 BTN_OPEN_BOT = "🚀 Открыть бота"
+BTN_CHECKIN_SKIP = "⏭️ Пропустить чекин"
+BTN_CHECKIN_DONE = "✅ Готово"
+
+# Log levels
+LOG_LEVEL_LABELS = {
+    "minimal": "Минимум",
+    "standard": "Стандарт",
+    "detailed": "Подробно",
+}
+LOG_LEVEL_HINTS = {
+    "minimal": "вес, повторы, сложность, заметки",
+    "standard": "+ чекин в конце: энергия / сон / боль",
+    "detailed": "+ RPE на каждый подход и чекин",
+}
 
 # Difficulty
 BTN_EASY = "😌 Легко"
@@ -50,12 +64,14 @@ BTN_HIST_EDIT_SETS = "✏️ Править подходы"
 
 # Admin
 BTN_ADM_TEMPLATES = "📋 Шаблоны дней"
+BTN_ADM_CURRENT = "💪 Текущие упражнения"
 BTN_ADM_ARCHIVE = "📦 Архив упражнений"
 BTN_ADM_SCHEDULE = "📅 График недели"
 BTN_ADM_HOURS = "⏰ Часы напоминаний"
 BTN_ADM_ATHLETES_HIST = "📜 История атлетов"
 BTN_ADM_MISSING = "👀 Кто не залогировал"
 BTN_ADM_USERS = "👥 Пользователи"
+BTN_ADM_SNAPSHOT = "🧠 Снимок для NN"
 
 # Screen markers
 ICO_EXERCISE = "🏋️"
