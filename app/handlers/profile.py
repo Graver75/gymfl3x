@@ -9,10 +9,10 @@ from app import ui_copy as ui
 from app.db.models import LogLevel, TrainingPhase
 from app.db.session import SessionLocal
 from app.filters import PrivateChat
-from app.keyboards import main_menu, profile_kb
+from app.keyboards import main_menu, profile_kb, profile_reset_confirm_kb
 from app.services.metrics_log import log_body_weight
 from app.services.progression import PHASE_LABELS, phase_from_experience
-from app.services.users import can_open_admin, get_or_create_user
+from app.services.users import can_open_admin, get_or_create_user, reset_own_training_data
 from app.states import ProfileSG
 
 router = Router(name="profile")
@@ -138,6 +138,84 @@ async def set_log_level(callback: CallbackQuery) -> None:
             reply_markup=profile_kb(phase, level),
         )
     await callback.answer(f"Лог: {ui.LOG_LEVEL_LABELS.get(level.value, level.value)}")
+
+
+@router.callback_query(F.data == "profile:home")
+async def profile_home_cb(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    async with SessionLocal() as session:
+        user = await get_or_create_user(
+            session,
+            callback.from_user.id,
+            callback.from_user.full_name or "Athlete",
+        )
+        if not user.onboarding_done:
+            await callback.answer("Сначала /start", show_alert=True)
+            return
+        log_level = getattr(user, "log_level", None) or LogLevel.minimal
+        text = _profile_text(user)
+        phase = user.phase
+    await callback.message.edit_text(
+        text + "\n\nФаза и детализация лога — кнопки ниже.\n"
+        "Вес: /weight · Стаж: /experience",
+        reply_markup=profile_kb(phase, log_level),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "profile:reset")
+async def profile_reset_ask(callback: CallbackQuery) -> None:
+    if callback.message is None:
+        return
+    await callback.message.edit_text(
+        "Обнулить только свои данные?\n\n"
+        "Удалится:\n"
+        "• все тренировки и подходы\n"
+        "• автоподбор весов / состояния упражнений\n"
+        "• история веса тела\n"
+        "• заметки к упражнениям\n\n"
+        "Останется: имя, код, текущий вес/рост/стаж/фаза, "
+        "настройки лога и роли админа.\n"
+        "Чужие данные и общая программа не трогаются.",
+        reply_markup=profile_reset_confirm_kb(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "profile:resetok")
+async def profile_reset_ok(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    async with SessionLocal() as session:
+        user = await get_or_create_user(
+            session,
+            callback.from_user.id,
+            callback.from_user.full_name or "Athlete",
+        )
+        if not user.onboarding_done:
+            await callback.answer("Сначала /start", show_alert=True)
+            return
+        stats = await reset_own_training_data(session, user.id)
+        log_level = getattr(user, "log_level", None) or LogLevel.minimal
+        text = _profile_text(user)
+        phase = user.phase
+        show_admin = can_open_admin(user)
+    await callback.message.edit_text(
+        "Готово, данные обнулены.\n"
+        f"Сессий: {stats['sessions']}, "
+        f"состояний: {stats['exercise_states']}, "
+        f"логов веса: {stats['body_weight_logs']}, "
+        f"заметок: {stats['note_logs']}.\n\n"
+        + text
+        + "\n\nФаза и детализация лога — кнопки ниже.",
+        reply_markup=profile_kb(phase, log_level),
+    )
+    await callback.message.answer(
+        "Можно начинать с чистого листа.",
+        reply_markup=main_menu(show_admin=show_admin),
+    )
+    await callback.answer("Обнулено")
 
 
 @router.message(Command("weight"))

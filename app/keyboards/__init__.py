@@ -65,7 +65,24 @@ def profile_kb(current_phase: TrainingPhase, current_log: LogLevel) -> InlineKey
             )
         )
     rows.append(level_row)
+    rows.append(
+        [InlineKeyboardButton(text=ui.BTN_PROFILE_RESET, callback_data="profile:reset")]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def profile_reset_confirm_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=ui.BTN_PROFILE_RESET_OK,
+                    callback_data="profile:resetok",
+                ),
+                InlineKeyboardButton(text=ui.BTN_CANCEL, callback_data="profile:home"),
+            ]
+        ]
+    )
 
 
 def scale_1_5_kb(prefix: str, *, skip_label: str | None = None) -> InlineKeyboardMarkup:
@@ -627,14 +644,41 @@ def history_exercises_kb(names: list[str], page: int = 0, *, back: str = "hist:h
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def history_session_detail_kb(session_id: int, *, can_edit: bool, back: str = "hist:sessions") -> InlineKeyboardMarkup:
+def history_session_detail_kb(
+    session_id: int,
+    *,
+    can_edit: bool,
+    back: str = "hist:sessions",
+) -> InlineKeyboardMarkup:
     rows = []
     if can_edit:
         rows.append(
             [InlineKeyboardButton(text=ui.BTN_HIST_EDIT_SETS, callback_data=f"hist:edit:{session_id}")]
         )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=ui.BTN_HIST_DELETE_SESSION,
+                    callback_data=f"hist:sdel:{session_id}",
+                )
+            ]
+        )
     rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data=back)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def history_delete_session_kb(session_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=ui.BTN_HIST_DELETE_CONFIRM,
+                    callback_data=f"hist:sdelok:{session_id}",
+                ),
+                InlineKeyboardButton(text=ui.BTN_CANCEL, callback_data=f"hist:s:{session_id}"),
+            ]
+        ]
+    )
 
 
 def history_edit_sets_kb(sets: list, session_id: int) -> InlineKeyboardMarkup:

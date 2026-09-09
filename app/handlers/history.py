@@ -12,6 +12,7 @@ from app.filters import PrivateChat
 from app.keyboards import (
     history_athletes_kb,
     history_back_kb,
+    history_delete_session_kb,
     history_edit_set_kb,
     history_edit_sets_kb,
     history_exercises_kb,
@@ -21,6 +22,7 @@ from app.keyboards import (
 )
 from app.services.history import (
     athlete_label,
+    delete_workout_session,
     format_athlete_week,
     format_exercise_history,
     format_session_history,
@@ -29,6 +31,7 @@ from app.services.history import (
     list_athletes,
     list_recent_sessions,
     list_user_exercise_names,
+    session_notes,
 )
 from app.db.models import SessionSet
 from app.states import EditSessionSG
@@ -225,6 +228,9 @@ async def hist_sessions(callback: CallbackQuery, state: FSMContext) -> None:
 async def hist_session_detail(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.message is None or callback.data is None:
         return
+    # Avoid matching hist:sdel / hist:sdelok
+    if callback.data.startswith("hist:sdel"):
+        return
     viewer = await _viewer(callback)
     if not viewer:
         await callback.answer("Сначала /start", show_alert=True)
@@ -236,7 +242,8 @@ async def hist_session_detail(callback: CallbackQuery, state: FSMContext) -> Non
         if not ws:
             await callback.answer("Не найдено", show_alert=True)
             return
-        text = format_session_history(ws)
+        notes = await session_notes(session, session_id)
+        text = format_session_history(ws, notes=notes)
         if viewing_other:
             text = f"{label}\n{text}"
     can_edit = (not viewing_other) or viewer.is_admin
@@ -247,6 +254,70 @@ async def hist_session_detail(callback: CallbackQuery, state: FSMContext) -> Non
         ),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("hist:sdel:"))
+async def hist_delete_session_ask(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None or callback.data is None:
+        return
+    if ":sdelok:" in callback.data:
+        return
+    viewer = await _viewer(callback)
+    if not viewer:
+        await callback.answer("Сначала /start", show_alert=True)
+        return
+    target_id, label, viewing_other = await _target_context(state, viewer)
+    can_edit = (not viewing_other) or viewer.is_admin
+    if not can_edit:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    session_id = int(callback.data.split(":")[-1])
+    async with SessionLocal() as session:
+        ws = await get_user_session(session, target_id, session_id)
+        if not ws:
+            await callback.answer("Не найдено", show_alert=True)
+            return
+        title = ws.template.name if ws.template else "Тренировка"
+        when = ui.format_user_date(ws.session_date)
+    who = f" атлета {label}" if viewing_other else ""
+    await callback.message.edit_text(
+        f"Удалить тренировку{who}?\n"
+        f"{title} · {when}\n\n"
+        "Удалятся все подходы и связанные заметки этой сессии "
+        "(данные для нейросети тоже). Вес тела и текущие рабочие веса упражнений останутся.",
+        reply_markup=history_delete_session_kb(session_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("hist:sdelok:"))
+async def hist_delete_session_ok(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None or callback.data is None:
+        return
+    viewer = await _viewer(callback)
+    if not viewer:
+        await callback.answer("Сначала /start", show_alert=True)
+        return
+    target_id, label, viewing_other = await _target_context(state, viewer)
+    can_edit = (not viewing_other) or viewer.is_admin
+    if not can_edit:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    session_id = int(callback.data.split(":")[-1])
+    async with SessionLocal() as session:
+        ok = await delete_workout_session(
+            session, owner_user_id=target_id, session_id=session_id
+        )
+        sessions = await list_recent_sessions(session, target_id, limit=12) if ok else []
+    if not ok:
+        await callback.answer("Уже удалено", show_alert=True)
+        return
+    title = f"Тренировки · {label}:" if viewing_other else "Последние тренировки:"
+    await callback.message.edit_text(
+        f"Тренировка удалена.\n\n{title}",
+        reply_markup=history_sessions_kb(sessions, back=_section_back(viewing_other)),
+    )
+    await callback.answer("Удалено")
 
 
 @router.callback_query(F.data == "hist:exercises")

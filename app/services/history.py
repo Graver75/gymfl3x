@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.models import SessionSet, SessionStatus, WorkoutSession
+from app.db.models import ExerciseNoteLog, SessionSet, SessionStatus, WorkoutSession
 from app.services.archive import name_key
 from app.services.progression import DIFFICULTY_LABELS, format_session_exercise
 from app import ui_copy as ui
@@ -319,19 +319,133 @@ def _unique_ints(values: list[int | None]) -> list[int]:
     return out
 
 
-def format_session_history(ws: WorkoutSession) -> str:
+def _format_set_line(s: SessionSet) -> str:
+    if (s.set_number or 0) > 0:
+        label = f"#{s.set_number}"
+        if s.drop_index:
+            label += f".{s.drop_index}"
+        base = f"{label} {s.reps}×{s.weight:g}"
+    else:
+        base = f"{s.reps}×{s.weight:g}"
+    if s.rpe_1_10 is not None:
+        base += f" · RPE{s.rpe_1_10}"
+    return base
+
+
+def _session_duration_label(ws: WorkoutSession) -> str | None:
+    if not ws.started_at or not ws.finished_at:
+        return None
+    started = ws.started_at
+    finished = ws.finished_at
+    if started.tzinfo is None or finished.tzinfo is None:
+        delta = finished.replace(tzinfo=None) - started.replace(tzinfo=None)
+    else:
+        delta = finished - started
+    total = int(delta.total_seconds())
+    if total < 0:
+        return None
+    minutes, seconds = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
+
+
+def format_session_history(
+    ws: WorkoutSession,
+    *,
+    notes: list | None = None,
+) -> str:
     title = ws.template.name if ws.template else "Тренировка"
     lines = [f"{ui.ICO_HISTORY} {title} · {ui.format_user_date(ws.session_date)}"]
+
+    meta: list[str] = []
+    duration = _session_duration_label(ws)
+    if duration:
+        meta.append(f"{ui.ICO_REST} {duration}")
+    total_vol = sum(float(s.volume or 0) for s in ws.sets)
+    if total_vol:
+        meta.append(f"объём {total_vol:g}")
+    if meta:
+        lines.append(" · ".join(meta))
+
+    checkin_bits = []
+    if ws.energy_1_5 is not None:
+        checkin_bits.append(f"энергия {ws.energy_1_5}")
+    if ws.sleep_1_5 is not None:
+        checkin_bits.append(f"сон {ws.sleep_1_5}")
+    if ws.pain_1_5 is not None:
+        checkin_bits.append(f"боль {ws.pain_1_5}")
+    if checkin_bits:
+        lines.append(f"Чекин: {' · '.join(checkin_bits)}")
+
+    lines.append("")
+
     grouped: dict[str, list] = defaultdict(list)
-    for s in ws.sets:
+    for s in sorted(ws.sets, key=lambda x: (x.id,)):
         grouped[s.exercise_name].append(s)
     if not grouped:
         lines.append("Пусто")
         return "\n".join(lines)
+
+    notes_by_ex: dict[str, list] = defaultdict(list)
+    for n in notes or []:
+        notes_by_ex[name_key(n.exercise_name)].append(n)
+
     for name, rows in grouped.items():
-        diff = DIFFICULTY_LABELS.get(rows[-1].difficulty, "")
-        lines.append(f"{ui.ICO_EXERCISE} {name}\n  {format_session_exercise(rows)} {diff}".rstrip())
-    return "\n".join(lines)
+        rows_sorted = sorted(
+            rows,
+            key=lambda s: (s.set_number or 0, s.drop_index or 0, s.id),
+        )
+        diff = DIFFICULTY_LABELS.get(rows_sorted[-1].difficulty, "")
+        lines.append(f"{ui.ICO_EXERCISE} {name}")
+        for s in rows_sorted:
+            lines.append(f"  {_format_set_line(s)}")
+        summary = format_session_exercise(rows_sorted)
+        footer = f"  ∑ {summary}"
+        if diff:
+            footer += f" · {diff}"
+        lines.append(footer)
+        for n in notes_by_ex.get(name_key(name), []):
+            if n.cleared:
+                lines.append(f"  {ui.ICO_NOTE} (очищена)")
+            elif n.text:
+                lines.append(f"  {ui.ICO_NOTE} {n.text}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
+
+
+async def session_notes(
+    session: AsyncSession,
+    session_id: int,
+) -> list[ExerciseNoteLog]:
+    result = await session.execute(
+        select(ExerciseNoteLog)
+        .where(ExerciseNoteLog.session_id == session_id)
+        .order_by(ExerciseNoteLog.created_at.asc())
+    )
+    return list(result.scalars().all())
+
+
+async def delete_workout_session(
+    session: AsyncSession,
+    *,
+    owner_user_id: int,
+    session_id: int,
+) -> bool:
+    """Delete a finished/active session and NN-related note logs for it."""
+    ws = await get_user_session(session, owner_user_id, session_id)
+    if not ws:
+        return False
+    notes = await session.execute(
+        select(ExerciseNoteLog).where(ExerciseNoteLog.session_id == session_id)
+    )
+    for note in notes.scalars().all():
+        await session.delete(note)
+    await session.delete(ws)
+    await session.commit()
+    return True
 
 
 async def format_exercise_history(
@@ -359,10 +473,28 @@ async def format_exercise_history(
     lines.append("")
     for ws in history:
         rows = [s for s in ws.sets if name_key(s.exercise_name) == name_key(exercise_name)]
+        rows = sorted(rows, key=lambda s: (s.set_number or 0, s.drop_index or 0, s.id))
         diff = DIFFICULTY_LABELS.get(rows[-1].difficulty, "") if rows else ""
-        lines.append(
-            f"{ui.format_user_date(ws.session_date)}: {format_session_exercise(rows)} {diff}".rstrip()
-        )
+        set_bits = []
+        for s in rows:
+            bit = f"{s.reps}×{s.weight:g}"
+            if s.rpe_1_10 is not None:
+                bit += f"@{s.rpe_1_10}"
+            set_bits.append(bit)
+        line = f"{ui.format_user_date(ws.session_date)}: {', '.join(set_bits) or format_session_exercise(rows)}"
+        if diff:
+            line += f" · {diff}"
+        # session checkin snippet if any
+        chk = []
+        if ws.energy_1_5 is not None:
+            chk.append(f"E{ws.energy_1_5}")
+        if ws.sleep_1_5 is not None:
+            chk.append(f"S{ws.sleep_1_5}")
+        if ws.pain_1_5 is not None:
+            chk.append(f"P{ws.pain_1_5}")
+        if chk:
+            line += f" · {'/'.join(chk)}"
+        lines.append(line)
     return "\n".join(lines)
 
 

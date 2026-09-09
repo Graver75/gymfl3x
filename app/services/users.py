@@ -1,10 +1,16 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.db.models import User
+from app.db.models import (
+    BodyWeightLog,
+    ExerciseNoteLog,
+    User,
+    UserExerciseState,
+    WorkoutSession,
+)
 from app.services.metrics_log import log_body_weight
 from app.services.progression import phase_from_experience
 
@@ -71,3 +77,28 @@ async def apply_onboarding(
     await session.commit()
     await session.refresh(user)
     return user
+
+
+async def reset_own_training_data(session: AsyncSession, user_id: int) -> dict[str, int]:
+    """Wipe personal training/NN data. Keeps profile identity, roles, settings."""
+    # Note logs first (FK to sessions)
+    notes = await session.execute(
+        delete(ExerciseNoteLog).where(ExerciseNoteLog.user_id == user_id)
+    )
+    # Sessions cascade to session_sets
+    sessions = await session.execute(
+        delete(WorkoutSession).where(WorkoutSession.user_id == user_id)
+    )
+    states = await session.execute(
+        delete(UserExerciseState).where(UserExerciseState.user_id == user_id)
+    )
+    bw = await session.execute(
+        delete(BodyWeightLog).where(BodyWeightLog.user_id == user_id)
+    )
+    await session.commit()
+    return {
+        "sessions": sessions.rowcount or 0,
+        "exercise_states": states.rowcount or 0,
+        "body_weight_logs": bw.rowcount or 0,
+        "note_logs": notes.rowcount or 0,
+    }
