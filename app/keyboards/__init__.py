@@ -165,14 +165,59 @@ def templates_list_kb(templates: list) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def template_detail_kb(template_id: int) -> InlineKeyboardMarkup:
+def template_detail_kb(template_id: int, exercises: list | None = None) -> InlineKeyboardMarkup:
+    rows = []
+    for ex in exercises or []:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{ex.position + 1}. {ex.name}",
+                    callback_data=f"adm:ex:view:{ex.id}",
+                )
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text="+ Упражнение", callback_data=f"adm:ex:add:{template_id}")]
+    )
+    rows.append(
+        [InlineKeyboardButton(text="Удалить шаблон", callback_data=f"adm:tpl:del:{template_id}")]
+    )
+    rows.append([InlineKeyboardButton(text="« К шаблонам", callback_data="adm:templates")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def exercise_edit_kb(exercise_id: int, template_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="+ Упражнение", callback_data=f"adm:ex:add:{template_id}")],
-            [InlineKeyboardButton(text="Удалить шаблон", callback_data=f"adm:tpl:del:{template_id}")],
-            [InlineKeyboardButton(text="« К шаблонам", callback_data="adm:templates")],
+            [InlineKeyboardButton(text="Переименовать", callback_data=f"adm:ex:name:{exercise_id}")],
+            [InlineKeyboardButton(text="Цели (подходы/повторы)", callback_data=f"adm:ex:tgt:{exercise_id}")],
+            [InlineKeyboardButton(text="В другой шаблон", callback_data=f"adm:ex:move:{exercise_id}")],
+            [InlineKeyboardButton(text="Удалить упражнение", callback_data=f"adm:ex:del:{exercise_id}")],
+            [InlineKeyboardButton(text="« К шаблону", callback_data=f"adm:tpl:{template_id}")],
         ]
     )
+
+
+def exercise_delete_confirm_kb(exercise_id: int, template_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Да, удалить", callback_data=f"adm:ex:delok:{exercise_id}"),
+                InlineKeyboardButton(text="Отмена", callback_data=f"adm:ex:view:{exercise_id}"),
+            ],
+            [InlineKeyboardButton(text="« К шаблону", callback_data=f"adm:tpl:{template_id}")],
+        ]
+    )
+
+
+def exercise_move_kb(exercise_id: int, templates: list, current_template_id: int) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=t.name, callback_data=f"adm:ex:mvto:{exercise_id}:{t.id}")]
+        for t in templates
+        if t.id != current_template_id
+    ]
+    rows.append([InlineKeyboardButton(text="« Назад", callback_data=f"adm:ex:view:{exercise_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def schedule_kb(assignments: dict[int, str]) -> InlineKeyboardMarkup:

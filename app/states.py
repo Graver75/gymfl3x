@@ -23,6 +23,8 @@ class AdminSG(StatesGroup):
     new_template_hashtag = State()
     add_exercise_name = State()
     add_exercise_targets = State()
+    edit_exercise_name = State()
+    edit_exercise_targets = State()
     set_hours = State()
 
 

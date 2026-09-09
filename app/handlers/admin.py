@@ -8,11 +8,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
-from app.db.models import GroupChat, ScheduleDay, TemplateExercise, User, WorkoutTemplate
+from app.db.models import GroupChat, ScheduleDay, TemplateExercise, User, UserExerciseState, WorkoutTemplate
 from app.db.session import SessionLocal
 from app.filters import PrivateChat
 from app.keyboards import (
     admin_menu_kb,
+    exercise_delete_confirm_kb,
+    exercise_edit_kb,
+    exercise_move_kb,
     schedule_kb,
     schedule_pick_template_kb,
     template_detail_kb,
@@ -42,6 +45,63 @@ async def _admin_user(telegram_id: int, full_name: str) -> User | None:
 
 async def _deny(message: Message) -> None:
     await message.answer("Только для админа.")
+
+
+def _parse_targets(text: str) -> tuple[int, int, int, float] | None:
+    parts = text.replace(",", ".").split()
+    try:
+        sets = int(parts[0])
+        rmin = int(parts[1])
+        rmax = int(parts[2]) if len(parts) > 2 else rmin
+        step = float(parts[3]) if len(parts) > 3 else 2.5
+        if sets < 1 or rmin < 1 or rmax < rmin:
+            raise ValueError
+        return sets, rmin, rmax, step
+    except (ValueError, IndexError):
+        return None
+
+
+async def _reindex_positions(session, template_id: int) -> None:
+    result = await session.execute(
+        select(TemplateExercise)
+        .where(TemplateExercise.template_id == template_id)
+        .order_by(TemplateExercise.position, TemplateExercise.id)
+    )
+    for i, ex in enumerate(result.scalars().all()):
+        ex.position = i
+
+
+def _template_text(tpl: WorkoutTemplate) -> str:
+    lines = [f"{tpl.name} (#{tpl.hashtag})", ""]
+    if not tpl.exercises:
+        lines.append("Упражнений пока нет.")
+    else:
+        lines.append("Нажми упражнение, чтобы изменить / удалить / перенести:")
+        for ex in tpl.exercises:
+            lines.append(
+                f"{ex.position + 1}. {ex.name} — "
+                f"{ex.target_sets}×{ex.target_reps_min}-{ex.target_reps_max}"
+            )
+    return "\n".join(lines)
+
+
+async def _load_template(session, tpl_id: int) -> WorkoutTemplate | None:
+    return (
+        await session.execute(
+            select(WorkoutTemplate)
+            .where(WorkoutTemplate.id == tpl_id)
+            .options(selectinload(WorkoutTemplate.exercises))
+        )
+    ).scalar_one_or_none()
+
+
+def _exercise_text(ex: TemplateExercise, template_name: str) -> str:
+    return (
+        f"{ex.name}\n"
+        f"Шаблон: {template_name}\n"
+        f"Цель: {ex.target_sets}×{ex.target_reps_min}-{ex.target_reps_max}\n"
+        f"Шаг веса: {ex.weight_step:g} кг"
+    )
 
 
 @router.message(Command("admin"))
@@ -157,25 +217,14 @@ async def adm_tpl_detail(callback: CallbackQuery, state: FSMContext) -> None:
     tpl_id = int(parts[2])
     await state.clear()
     async with SessionLocal() as session:
-        tpl = (
-            await session.execute(
-                select(WorkoutTemplate)
-                .where(WorkoutTemplate.id == tpl_id)
-                .options(selectinload(WorkoutTemplate.exercises))
-            )
-        ).scalar_one_or_none()
+        tpl = await _load_template(session, tpl_id)
     if not tpl:
         await callback.answer("Не найден", show_alert=True)
         return
-    lines = [f"{tpl.name} (#{tpl.hashtag})", ""]
-    if not tpl.exercises:
-        lines.append("Упражнений пока нет.")
-    for ex in tpl.exercises:
-        lines.append(
-            f"{ex.position + 1}. {ex.name} — "
-            f"{ex.target_sets}×{ex.target_reps_min}-{ex.target_reps_max}"
-        )
-    await callback.message.edit_text("\n".join(lines), reply_markup=template_detail_kb(tpl.id))
+    await callback.message.edit_text(
+        _template_text(tpl),
+        reply_markup=template_detail_kb(tpl.id, tpl.exercises),
+    )
     await callback.answer()
 
 
@@ -239,17 +288,11 @@ async def adm_ex_targets(message: Message, state: FSMContext) -> None:
         return
     if not await _admin_user(message.from_user.id, message.from_user.full_name or "Admin"):
         return
-    parts = (message.text or "").replace(",", ".").split()
-    try:
-        sets = int(parts[0])
-        rmin = int(parts[1])
-        rmax = int(parts[2]) if len(parts) > 2 else rmin
-        step = float(parts[3]) if len(parts) > 3 else 2.5
-        if sets < 1 or rmin < 1 or rmax < rmin:
-            raise ValueError
-    except (ValueError, IndexError):
+    parsed = _parse_targets(message.text or "")
+    if not parsed:
         await message.answer("Формат: 4 8 12 2.5")
         return
+    sets, rmin, rmax, step = parsed
 
     data = await state.get_data()
     tpl_id = data["tpl_id"]
@@ -289,7 +332,251 @@ async def adm_ex_targets(message: Message, state: FSMContext) -> None:
             f"{item.position + 1}. {item.name} — "
             f"{item.target_sets}×{item.target_reps_min}-{item.target_reps_max}"
         )
-    await message.answer("\n".join(lines), reply_markup=template_detail_kb(tpl_id))
+    await message.answer("\n".join(lines), reply_markup=template_detail_kb(tpl_id, tpl.exercises))
+
+
+@router.callback_query(F.data.startswith("adm:ex:view:"))
+async def adm_ex_view(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.data is None or callback.from_user is None or callback.message is None:
+        return
+    if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await state.clear()
+    ex_id = int(callback.data.split(":")[-1])
+    async with SessionLocal() as session:
+        ex = await session.get(TemplateExercise, ex_id)
+        if not ex:
+            await callback.answer("Упражнение удалено", show_alert=True)
+            return
+        tpl = await session.get(WorkoutTemplate, ex.template_id)
+        text = _exercise_text(ex, tpl.name if tpl else "?")
+        tpl_id = ex.template_id
+    await callback.message.edit_text(
+        text,
+        reply_markup=exercise_edit_kb(ex_id, tpl_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:ex:name:"))
+async def adm_ex_rename_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.data is None or callback.from_user is None or callback.message is None:
+        return
+    if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    ex_id = int(callback.data.split(":")[-1])
+    await state.set_state(AdminSG.edit_exercise_name)
+    await state.update_data(exercise_id=ex_id)
+    await callback.message.answer("Новое название упражнения:")
+    await callback.answer()
+
+
+@router.message(AdminSG.edit_exercise_name)
+async def adm_ex_rename_save(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if not await _admin_user(message.from_user.id, message.from_user.full_name or "Admin"):
+        return
+    name = (message.text or "").strip()
+    if len(name) < 1:
+        await message.answer("Нужно название.")
+        return
+    data = await state.get_data()
+    ex_id = int(data["exercise_id"])
+    async with SessionLocal() as session:
+        ex = await session.get(TemplateExercise, ex_id)
+        if not ex:
+            await state.clear()
+            await message.answer("Упражнение уже удалено.")
+            return
+        ex.name = name[:128]
+        await session.commit()
+        tpl = await session.get(WorkoutTemplate, ex.template_id)
+        tpl_name = tpl.name if tpl else "?"
+        tpl_id = ex.template_id
+        text = _exercise_text(ex, tpl_name)
+    await state.clear()
+    await message.answer(f"Название обновлено.\n\n{text}", reply_markup=exercise_edit_kb(ex_id, tpl_id))
+
+
+@router.callback_query(F.data.startswith("adm:ex:tgt:"))
+async def adm_ex_targets_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.data is None or callback.from_user is None or callback.message is None:
+        return
+    if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    ex_id = int(callback.data.split(":")[-1])
+    await state.set_state(AdminSG.edit_exercise_targets)
+    await state.update_data(exercise_id=ex_id)
+    await callback.message.answer(
+        "Новые цели: подходы повторы_мин повторы_макс [шаг_кг]\n"
+        "Пример: 4 8 12 2.5"
+    )
+    await callback.answer()
+
+
+@router.message(AdminSG.edit_exercise_targets)
+async def adm_ex_targets_save(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if not await _admin_user(message.from_user.id, message.from_user.full_name or "Admin"):
+        return
+    parsed = _parse_targets(message.text or "")
+    if not parsed:
+        await message.answer("Формат: 4 8 12 2.5")
+        return
+    sets, rmin, rmax, step = parsed
+    data = await state.get_data()
+    ex_id = int(data["exercise_id"])
+    async with SessionLocal() as session:
+        ex = await session.get(TemplateExercise, ex_id)
+        if not ex:
+            await state.clear()
+            await message.answer("Упражнение уже удалено.")
+            return
+        ex.target_sets = sets
+        ex.target_reps_min = rmin
+        ex.target_reps_max = rmax
+        ex.weight_step = step
+        await session.commit()
+        tpl = await session.get(WorkoutTemplate, ex.template_id)
+        tpl_name = tpl.name if tpl else "?"
+        tpl_id = ex.template_id
+        text = _exercise_text(ex, tpl_name)
+    await state.clear()
+    await message.answer(f"Цели обновлены.\n\n{text}", reply_markup=exercise_edit_kb(ex_id, tpl_id))
+
+
+@router.callback_query(F.data.startswith("adm:ex:delok:"))
+async def adm_ex_delete_ok(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.from_user is None or callback.message is None:
+        return
+    if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    ex_id = int(callback.data.split(":")[-1])
+    async with SessionLocal() as session:
+        ex = await session.get(TemplateExercise, ex_id)
+        if not ex:
+            await callback.answer("Уже удалено")
+            return
+        tpl_id = ex.template_id
+        name = ex.name
+        states = (
+            await session.execute(
+                select(UserExerciseState).where(UserExerciseState.exercise_id == ex_id)
+            )
+        ).scalars().all()
+        for st in states:
+            await session.delete(st)
+        await session.delete(ex)
+        await session.flush()
+        await _reindex_positions(session, tpl_id)
+        await session.commit()
+        tpl = await _load_template(session, tpl_id)
+    text = f"Удалено: {name}\n\n" + (_template_text(tpl) if tpl else "Шаблон не найден.")
+    kb = template_detail_kb(tpl_id, tpl.exercises if tpl else None)
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer("Удалено")
+
+
+@router.callback_query(F.data.startswith("adm:ex:del:"))
+async def adm_ex_delete_ask(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.from_user is None or callback.message is None:
+        return
+    if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    ex_id = int(callback.data.split(":")[-1])
+    async with SessionLocal() as session:
+        ex = await session.get(TemplateExercise, ex_id)
+        if not ex:
+            await callback.answer("Уже удалено", show_alert=True)
+            return
+        tpl_id = ex.template_id
+        name = ex.name
+    await callback.message.edit_text(
+        f"Удалить «{name}» из шаблона? Логи прошлых тренировок останутся.",
+        reply_markup=exercise_delete_confirm_kb(ex_id, tpl_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:ex:move:"))
+async def adm_ex_move_pick(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.from_user is None or callback.message is None:
+        return
+    if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    ex_id = int(callback.data.split(":")[-1])
+    async with SessionLocal() as session:
+        ex = await session.get(TemplateExercise, ex_id)
+        if not ex:
+            await callback.answer("Упражнение удалено", show_alert=True)
+            return
+        templates = (await session.execute(select(WorkoutTemplate))).scalars().all()
+        others = [t for t in templates if t.id != ex.template_id]
+        current_id = ex.template_id
+        name = ex.name
+    if not others:
+        await callback.answer("Нет другого шаблона. Сначала создай его.", show_alert=True)
+        return
+    await callback.message.edit_text(
+        f"Куда перенести «{name}»?",
+        reply_markup=exercise_move_kb(ex_id, templates, current_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:ex:mvto:"))
+async def adm_ex_move_do(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.from_user is None or callback.message is None:
+        return
+    if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    ex_id = int(parts[3])
+    dest_id = int(parts[4])
+    async with SessionLocal() as session:
+        ex = await session.get(TemplateExercise, ex_id)
+        dest = await session.get(WorkoutTemplate, dest_id)
+        if not ex or not dest:
+            await callback.answer("Не найдено", show_alert=True)
+            return
+        if ex.template_id == dest_id:
+            await callback.answer("Уже в этом шаблоне")
+            return
+        source_id = ex.template_id
+        last = (
+            await session.execute(
+                select(TemplateExercise)
+                .where(TemplateExercise.template_id == dest_id)
+                .order_by(TemplateExercise.position.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        ex.template_id = dest_id
+        ex.position = (last.position + 1) if last else 0
+        await session.flush()
+        await _reindex_positions(session, source_id)
+        await _reindex_positions(session, dest_id)
+        await session.commit()
+        dest = await _load_template(session, dest_id)
+        ex_name = ex.name
+        dest_name = dest.name if dest else "?"
+    text = f"«{ex_name}» перенесено в «{dest_name}».\n\n" + (
+        _template_text(dest) if dest else ""
+    )
+    await callback.message.edit_text(
+        text,
+        reply_markup=template_detail_kb(dest_id, dest.exercises if dest else None),
+    )
+    await callback.answer("Перенесено")
 
 
 @router.callback_query(F.data == "adm:schedule")
