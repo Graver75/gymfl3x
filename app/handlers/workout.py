@@ -31,6 +31,7 @@ from app.keyboards import (
     weight_kb,
     workout_exercise_kb,
 )
+from app.services.archive import upsert_archive
 from app.services.progression import (
     DIFFICULTY_LABELS,
     format_block,
@@ -367,6 +368,7 @@ async def pick_difficulty(callback: CallbackQuery, state: FSMContext) -> None:
                 volume=volume,
             )
         )
+        await upsert_archive(session, exercise.name, overwrite_targets=False)
 
         ex_state = await _get_state(session, user.id, exercise.id)
         if ex_state is None:

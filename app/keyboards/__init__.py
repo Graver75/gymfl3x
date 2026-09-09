@@ -148,6 +148,7 @@ def admin_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Шаблоны дней", callback_data="adm:templates")],
+            [InlineKeyboardButton(text="Архив упражнений", callback_data="adm:archive")],
             [InlineKeyboardButton(text="График недели", callback_data="adm:schedule")],
             [InlineKeyboardButton(text="Часы напоминаний", callback_data="adm:hours")],
             [InlineKeyboardButton(text="Пользователи", callback_data="adm:users")],
@@ -247,3 +248,62 @@ def schedule_pick_template_kb(weekday: int, templates: list) -> InlineKeyboardMa
     )
     rows.append([InlineKeyboardButton(text="« Назад", callback_data="adm:schedule")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+ARCHIVE_PAGE = 8
+
+
+def _page_nav(page: int, total: int, prefix: str) -> list[list[InlineKeyboardButton]]:
+    pages = max(1, (total + ARCHIVE_PAGE - 1) // ARCHIVE_PAGE)
+    if pages <= 1:
+        return []
+    row = []
+    if page > 0:
+        row.append(InlineKeyboardButton(text="‹", callback_data=f"{prefix}:{page - 1}"))
+    row.append(InlineKeyboardButton(text=f"{page + 1}/{pages}", callback_data="adm:noop"))
+    if page + 1 < pages:
+        row.append(InlineKeyboardButton(text="›", callback_data=f"{prefix}:{page + 1}"))
+    return [row]
+
+
+def archive_pick_kb(template_id: int, items: list, page: int = 0) -> InlineKeyboardMarkup:
+    start = page * ARCHIVE_PAGE
+    chunk = items[start : start + ARCHIVE_PAGE]
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=item.name,
+                callback_data=f"adm:ex:from:{template_id}:{item.id}",
+            )
+        ]
+        for item in chunk
+    ]
+    rows.extend(_page_nav(page, len(items), f"adm:ex:pick:{template_id}"))
+    rows.append(
+        [InlineKeyboardButton(text="+ Новое упражнение", callback_data=f"adm:ex:new:{template_id}")]
+    )
+    rows.append([InlineKeyboardButton(text="« К шаблону", callback_data=f"adm:tpl:{template_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def archive_list_kb(items: list, page: int = 0) -> InlineKeyboardMarkup:
+    start = page * ARCHIVE_PAGE
+    chunk = items[start : start + ARCHIVE_PAGE]
+    rows = [
+        [InlineKeyboardButton(text=item.name, callback_data=f"adm:arch:v:{item.id}")]
+        for item in chunk
+    ]
+    if not chunk:
+        rows.append([InlineKeyboardButton(text="Пока пусто", callback_data="adm:noop")])
+    rows.extend(_page_nav(page, len(items), "adm:arch:p"))
+    rows.append([InlineKeyboardButton(text="« Назад", callback_data="adm:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def archive_item_kb(item_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Удалить из архива", callback_data=f"adm:arch:del:{item_id}")],
+            [InlineKeyboardButton(text="« К архиву", callback_data="adm:archive")],
+        ]
+    )

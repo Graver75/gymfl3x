@@ -184,6 +184,25 @@ class SessionSet(Base):
     exercise: Mapped[TemplateExercise | None] = relationship()
 
 
+class ExerciseArchive(Base):
+    """Named exercises that survive removal from templates."""
+
+    __tablename__ = "exercise_archive"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+    name_key: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    target_sets: Mapped[int] = mapped_column(Integer, default=3)
+    target_reps_min: Mapped[int] = mapped_column(Integer, default=8)
+    target_reps_max: Mapped[int] = mapped_column(Integer, default=12)
+    weight_step: Mapped[float] = mapped_column(Float, default=2.5)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class RecapSent(Base):
     """Tracks whether morning reminder / evening recap was already sent for a date."""
 

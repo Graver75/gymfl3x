@@ -11,10 +11,11 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.config import get_settings
-from app.db.session import init_db
+from app.db.session import SessionLocal, init_db
 from app.handlers import setup_routers
 from app.logging_setup import setup_logging
 from app.services.reminders import send_evening_recaps, send_morning_reminders
+from app.services.archive import backfill_archive
 
 logger = logging.getLogger("gymflex")
 
@@ -23,6 +24,10 @@ async def main() -> None:
     settings = get_settings()
     setup_logging(settings)
     await init_db()
+    async with SessionLocal() as session:
+        added = await backfill_archive(session)
+        if added:
+            logger.info("Exercise archive backfill: +%s", added)
 
     bot = Bot(
         token=settings.bot_token,

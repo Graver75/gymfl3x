@@ -8,11 +8,22 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
-from app.db.models import GroupChat, ScheduleDay, TemplateExercise, User, UserExerciseState, WorkoutTemplate
+from app.db.models import (
+    ExerciseArchive,
+    GroupChat,
+    ScheduleDay,
+    TemplateExercise,
+    User,
+    UserExerciseState,
+    WorkoutTemplate,
+)
 from app.db.session import SessionLocal
 from app.filters import PrivateChat
 from app.keyboards import (
     admin_menu_kb,
+    archive_item_kb,
+    archive_list_kb,
+    archive_pick_kb,
     exercise_delete_confirm_kb,
     exercise_edit_kb,
     exercise_move_kb,
@@ -21,6 +32,7 @@ from app.keyboards import (
     template_detail_kb,
     templates_list_kb,
 )
+from app.services.archive import add_exercise_to_template, list_archive, name_key, upsert_archive
 from app.services.reminders import WEEKDAY_NAMES
 from app.services.users import get_or_create_user
 from app.states import AdminSG
@@ -249,8 +261,56 @@ async def adm_tpl_del(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data == "adm:noop")
+async def adm_noop(callback: CallbackQuery) -> None:
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("adm:ex:add:"))
 async def adm_ex_add(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.data is None or callback.from_user is None or callback.message is None:
+        return
+    if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await state.clear()
+    tpl_id = int(callback.data.split(":")[-1])
+    async with SessionLocal() as session:
+        tpl = await _load_template(session, tpl_id)
+        items = await list_archive(session)
+        in_tpl = {name_key(ex.name) for ex in (tpl.exercises if tpl else [])}
+        unused = [i for i in items if i.name_key not in in_tpl]
+    if not tpl:
+        await callback.answer("Шаблон не найден", show_alert=True)
+        return
+    await callback.message.edit_text(
+        "Добавить упражнение. Из архива — одним нажатием, либо новое:",
+        reply_markup=archive_pick_kb(tpl_id, unused, 0),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:ex:pick:"))
+async def adm_ex_pick_page(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.from_user is None or callback.message is None:
+        return
+    if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    tpl_id = int(parts[3])
+    page = int(parts[4])
+    async with SessionLocal() as session:
+        tpl = await _load_template(session, tpl_id)
+        items = await list_archive(session)
+        in_tpl = {name_key(ex.name) for ex in (tpl.exercises if tpl else [])}
+        unused = [i for i in items if i.name_key not in in_tpl]
+    await callback.message.edit_reply_markup(reply_markup=archive_pick_kb(tpl_id, unused, page))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:ex:new:"))
+async def adm_ex_new(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.data is None or callback.from_user is None or callback.message is None:
         return
     if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
@@ -259,8 +319,45 @@ async def adm_ex_add(callback: CallbackQuery, state: FSMContext) -> None:
     tpl_id = int(callback.data.split(":")[-1])
     await state.set_state(AdminSG.add_exercise_name)
     await state.update_data(tpl_id=tpl_id)
-    await callback.message.answer("Название упражнения, например «Верхняя тяга»:")
+    await callback.message.answer("Название нового упражнения, например «Верхняя тяга»:")
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:ex:from:"))
+async def adm_ex_from_archive(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.from_user is None or callback.message is None:
+        return
+    if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    tpl_id = int(parts[3])
+    arch_id = int(parts[4])
+    async with SessionLocal() as session:
+        item = await session.get(ExerciseArchive, arch_id)
+        if not item:
+            await callback.answer("Нет в архиве", show_alert=True)
+            return
+        added, msg = await add_exercise_to_template(
+            session,
+            tpl_id,
+            name=item.name,
+            target_sets=item.target_sets,
+            target_reps_min=item.target_reps_min,
+            target_reps_max=item.target_reps_max,
+            weight_step=item.weight_step,
+        )
+        added_name = item.name
+        if added is None:
+            await callback.answer(msg, show_alert=True)
+            return
+        await session.commit()
+        tpl = await _load_template(session, tpl_id)
+    await callback.message.edit_text(
+        f"Добавлено из архива: {added_name}\n\n{_template_text(tpl)}" if tpl else msg,
+        reply_markup=template_detail_kb(tpl_id, tpl.exercises if tpl else None),
+    )
+    await callback.answer("Добавлено")
 
 
 @router.message(AdminSG.add_exercise_name)
@@ -297,35 +394,25 @@ async def adm_ex_targets(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     tpl_id = data["tpl_id"]
     async with SessionLocal() as session:
-        existing = (
-            await session.execute(
-                select(TemplateExercise)
-                .where(TemplateExercise.template_id == tpl_id)
-                .order_by(TemplateExercise.position.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        pos = (existing.position + 1) if existing else 0
-        ex = TemplateExercise(
-            template_id=tpl_id,
+        added, msg = await add_exercise_to_template(
+            session,
+            tpl_id,
             name=data["ex_name"],
-            position=pos,
             target_sets=sets,
             target_reps_min=rmin,
             target_reps_max=rmax,
             weight_step=step,
         )
-        session.add(ex)
+        if added is None:
+            await message.answer(msg)
+            return
         await session.commit()
-        tpl = (
-            await session.execute(
-                select(WorkoutTemplate)
-                .where(WorkoutTemplate.id == tpl_id)
-                .options(selectinload(WorkoutTemplate.exercises))
-            )
-        ).scalar_one()
+        tpl = await _load_template(session, tpl_id)
 
     await state.clear()
+    if not tpl:
+        await message.answer(msg)
+        return
     lines = [f"Добавлено. {tpl.name}:"]
     for item in tpl.exercises:
         lines.append(
@@ -392,6 +479,15 @@ async def adm_ex_rename_save(message: Message, state: FSMContext) -> None:
             await message.answer("Упражнение уже удалено.")
             return
         ex.name = name[:128]
+        await upsert_archive(
+            session,
+            ex.name,
+            target_sets=ex.target_sets,
+            target_reps_min=ex.target_reps_min,
+            target_reps_max=ex.target_reps_max,
+            weight_step=ex.weight_step,
+            overwrite_targets=True,
+        )
         await session.commit()
         tpl = await session.get(WorkoutTemplate, ex.template_id)
         tpl_name = tpl.name if tpl else "?"
@@ -441,6 +537,15 @@ async def adm_ex_targets_save(message: Message, state: FSMContext) -> None:
         ex.target_reps_min = rmin
         ex.target_reps_max = rmax
         ex.weight_step = step
+        await upsert_archive(
+            session,
+            ex.name,
+            target_sets=sets,
+            target_reps_min=rmin,
+            target_reps_max=rmax,
+            weight_step=step,
+            overwrite_targets=True,
+        )
         await session.commit()
         tpl = await session.get(WorkoutTemplate, ex.template_id)
         tpl_name = tpl.name if tpl else "?"
@@ -465,6 +570,15 @@ async def adm_ex_delete_ok(callback: CallbackQuery) -> None:
             return
         tpl_id = ex.template_id
         name = ex.name
+        await upsert_archive(
+            session,
+            name,
+            target_sets=ex.target_sets,
+            target_reps_min=ex.target_reps_min,
+            target_reps_max=ex.target_reps_max,
+            weight_step=ex.weight_step,
+            overwrite_targets=True,
+        )
         states = (
             await session.execute(
                 select(UserExerciseState).where(UserExerciseState.exercise_id == ex_id)
@@ -577,6 +691,93 @@ async def adm_ex_move_do(callback: CallbackQuery) -> None:
         reply_markup=template_detail_kb(dest_id, dest.exercises if dest else None),
     )
     await callback.answer("Перенесено")
+
+
+@router.callback_query(F.data == "adm:archive")
+async def adm_archive(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    page = 0
+    async with SessionLocal() as session:
+        items = await list_archive(session)
+    await callback.message.edit_text(
+        "Архив упражнений. Сюда попадает всё, что когда-либо было в программе или в логе.\n"
+        "Удаление из шаблона архив не трогает.",
+        reply_markup=archive_list_kb(items, page),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:arch:p:"))
+async def adm_archive_page(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.from_user is None or callback.message is None:
+        return
+    if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    page = int(callback.data.split(":")[-1])
+    async with SessionLocal() as session:
+        items = await list_archive(session)
+    await callback.message.edit_reply_markup(reply_markup=archive_list_kb(items, page))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:arch:v:"))
+async def adm_archive_view(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.from_user is None or callback.message is None:
+        return
+    if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    item_id = int(callback.data.split(":")[-1])
+    async with SessionLocal() as session:
+        item = await session.get(ExerciseArchive, item_id)
+        if not item:
+            await callback.answer("Нет в архиве", show_alert=True)
+            return
+        used = (
+            await session.execute(select(TemplateExercise))
+        ).scalars().all()
+        used = [ex for ex in used if name_key(ex.name) == item.name_key]
+        tpl_ids = {ex.template_id for ex in used}
+        names = []
+        for tid in tpl_ids:
+            tpl = await session.get(WorkoutTemplate, tid)
+            if tpl:
+                names.append(tpl.name)
+        text = (
+            f"{item.name}\n"
+            f"Цель: {item.target_sets}×{item.target_reps_min}-{item.target_reps_max}, "
+            f"шаг {item.weight_step:g} кг\n"
+            f"Сейчас в шаблонах: {', '.join(names) if names else 'нигде (только архив)'}"
+        )
+        item_pk = item.id
+    await callback.message.edit_text(text, reply_markup=archive_item_kb(item_pk))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:arch:del:"))
+async def adm_archive_delete(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.from_user is None or callback.message is None:
+        return
+    if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    item_id = int(callback.data.split(":")[-1])
+    async with SessionLocal() as session:
+        item = await session.get(ExerciseArchive, item_id)
+        if item:
+            await session.delete(item)
+            await session.commit()
+        items = await list_archive(session)
+    await callback.message.edit_text(
+        "Удалено из архива. Шаблоны и логи тренировок не трогались.",
+        reply_markup=archive_list_kb(items, 0),
+    )
+    await callback.answer("Удалено")
 
 
 @router.callback_query(F.data == "adm:schedule")
