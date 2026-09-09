@@ -5,6 +5,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from app import ui_copy as ui
 from app.db.models import TrainingPhase
 from app.db.session import SessionLocal
 from app.filters import PrivateChat
@@ -37,7 +38,7 @@ def _profile_text(user) -> str:
     height = f"{user.height_cm:g} см" if user.height_cm else "—"
     months = user.experience_months if user.experience_months is not None else "—"
     return (
-        f"Профиль\n"
+        f"{ui.BTN_PROFILE}\n"
         f"Имя: {user.display_name}\n"
         f"Код: {user.short_code}\n"
         f"Вес: {user.body_weight:g} кг\n"
@@ -49,7 +50,7 @@ def _profile_text(user) -> str:
 
 
 @router.message(Command("profile"))
-@router.message(F.text == "Профиль")
+@router.message(F.text == ui.BTN_PROFILE)
 async def show_profile(message: Message, state: FSMContext) -> None:
     await state.clear()
     user = await _require_user(message)

@@ -5,6 +5,7 @@ from aiogram.filters import CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from app import ui_copy as ui
 from app.db.session import SessionLocal
 from app.filters import PrivateChat
 from app.keyboards import main_menu, skip_kb
@@ -33,19 +34,18 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
     if user.onboarding_done:
         await state.clear()
         text = (
-            f"Привет, {user.display_name}!\n"
+            f"{ui.ICO_WAVE} Привет, {user.display_name}!\n"
             f"Код в сводке: {user.short_code}\n"
-            f"Фаза: {PHASE_LABELS[user.phase]}\n\n"
-            "Меню внизу: Тренировка / Сегодня / История / Программа / Профиль."
+            f"Фаза: {PHASE_LABELS[user.phase]}"
         )
         await message.answer(text, reply_markup=main_menu(user.is_admin))
         if payload == "workout":
-            await message.answer("Жми «Тренировка», чтобы начать лог.")
+            await message.answer(f"Жми «{ui.BTN_WORKOUT}», чтобы начать лог.")
         return
 
     await state.set_state(OnboardingSG.display_name)
     await message.answer(
-        "Привет! Это Gymflex — бот для логов в качалке.\n\n"
+        f"{ui.ICO_WAVE} Привет! Это Gymflex — бот для логов в качалке.\n\n"
         "Сначала онбординг. Как тебя называть?"
     )
 
@@ -150,14 +150,13 @@ async def onb_experience(message: Message, state: FSMContext) -> None:
 
     await state.clear()
     await message.answer(
-        "Готово!\n"
+        f"{ui.ICO_DONE} Готово!\n"
         f"Фаза прогрессии: {PHASE_LABELS[user.phase]}\n\n"
         "• медовый месяц (<6 мес) — быстрее поднимаем вес\n"
         "• средний (6–18) — умеренно\n"
         "• плато (>18) — сначала повторы, потом вес\n\n"
-        "Фазу можно сменить в Профиле.\n"
+        f"Фазу можно сменить в {ui.BTN_PROFILE}.\n"
         "Админ задаёт общую программу — она read-only для остальных.\n\n"
-        "Команды: /today /program /profile /admin\n"
-        "Или кнопки меню внизу.",
+        "Команды: /today /program /profile /admin",
         reply_markup=main_menu(user.is_admin),
     )

@@ -4,22 +4,23 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardBu
 
 from app.db.models import Difficulty, TemplateExercise, TrainingPhase, UserExerciseState
 from app.services.progression import PHASE_LABELS
+from app import ui_copy as ui
 
 
 def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text="Тренировка"), KeyboardButton(text="Сегодня")],
-        [KeyboardButton(text="История"), KeyboardButton(text="Программа")],
-        [KeyboardButton(text="Профиль")],
+        [KeyboardButton(text=ui.BTN_WORKOUT), KeyboardButton(text=ui.BTN_TODAY)],
+        [KeyboardButton(text=ui.BTN_HISTORY), KeyboardButton(text=ui.BTN_PROGRAM)],
+        [KeyboardButton(text=ui.BTN_PROFILE)],
     ]
     if is_admin:
-        rows.append([KeyboardButton(text="Админка")])
+        rows.append([KeyboardButton(text=ui.BTN_ADMIN)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 def skip_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="Пропустить", callback_data="onb:skip_height")]]
+        inline_keyboard=[[InlineKeyboardButton(text=ui.BTN_SKIP, callback_data="onb:skip_height")]]
     )
 
 
@@ -42,20 +43,20 @@ def workout_mode_kb(*, has_today: bool) -> InlineKeyboardMarkup:
     rows = []
     if has_today:
         rows.append(
-            [InlineKeyboardButton(text="По графику сегодня", callback_data="wo:mode:today")]
+            [InlineKeyboardButton(text=ui.BTN_MODE_TODAY, callback_data="wo:mode:today")]
         )
-    rows.append([InlineKeyboardButton(text="Свободная тренировка", callback_data="wo:mode:free")])
-    rows.append([InlineKeyboardButton(text="Отмена", callback_data="wo:cancel")])
+    rows.append([InlineKeyboardButton(text=ui.BTN_MODE_FREE, callback_data="wo:mode:free")])
+    rows.append([InlineKeyboardButton(text=ui.BTN_CANCEL, callback_data="wo:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def workout_templates_kb(templates: list) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=t.name, callback_data=f"wo:tpl:{t.id}")]
+        [InlineKeyboardButton(text=f"📋 {t.name}", callback_data=f"wo:tpl:{t.id}")]
         for t in templates
     ]
-    rows.append([InlineKeyboardButton(text="Из архива упражнений", callback_data="wo:arch")])
-    rows.append([InlineKeyboardButton(text="« Назад", callback_data="wo:mode:back")])
+    rows.append([InlineKeyboardButton(text=ui.BTN_FROM_ARCHIVE, callback_data="wo:arch")])
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="wo:mode:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -78,9 +79,9 @@ def workout_archive_kb(items: list, *, page: int = 0) -> InlineKeyboardMarkup:
     if nav:
         rows.append(nav)
     if not chunk:
-        rows.append([InlineKeyboardButton(text="Архив пуст", callback_data="adm:noop")])
-    rows.append([InlineKeyboardButton(text="Закончить тренировку", callback_data="wo:finish")])
-    rows.append([InlineKeyboardButton(text="« Назад", callback_data="wo:mode:free")])
+        rows.append([InlineKeyboardButton(text="📭 Архив пуст", callback_data="adm:noop")])
+    rows.append([InlineKeyboardButton(text=ui.BTN_FINISH_WORKOUT, callback_data="wo:finish")])
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="wo:mode:free")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -94,9 +95,9 @@ def workout_exercise_kb(
     rows = []
     for ex in exercises:
         if ex.id in done_ids:
-            mark = "✅ "
+            mark = f"{ui.ICO_DONE} "
         elif next_id is not None and ex.id == next_id:
-            mark = "➡️ "
+            mark = f"{ui.ICO_NEXT} "
         else:
             mark = ""
         target = f"{ex.target_sets}×{ex.target_reps_min}-{ex.target_reps_max}"
@@ -111,8 +112,8 @@ def workout_exercise_kb(
                 )
             ]
         )
-    rows.append([InlineKeyboardButton(text="Закончить тренировку", callback_data="wo:finish")])
-    rows.append([InlineKeyboardButton(text="Отмена", callback_data="wo:cancel")])
+    rows.append([InlineKeyboardButton(text=ui.BTN_FINISH_WORKOUT, callback_data="wo:finish")])
+    rows.append([InlineKeyboardButton(text=ui.BTN_CANCEL, callback_data="wo:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -161,8 +162,8 @@ def weight_kb(
             break
     for i in range(0, len(presets), 3):
         buttons.append(presets[i : i + 3])
-    buttons.append([InlineKeyboardButton(text="Ввести вес", callback_data="wo:w:custom")])
-    buttons.append([InlineKeyboardButton(text="« Назад", callback_data="wo:back")])
+    buttons.append([InlineKeyboardButton(text=ui.BTN_ENTER_WEIGHT, callback_data="wo:w:custom")])
+    buttons.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="wo:back")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -186,9 +187,9 @@ def reps_kb(
         for r in options
     ]
     rows = [row[i : i + 4] for i in range(0, len(row), 4)]
-    rows.append([InlineKeyboardButton(text="Отказ", callback_data="wo:r:0")])
-    rows.append([InlineKeyboardButton(text="Ввести число", callback_data="wo:r:custom")])
-    rows.append([InlineKeyboardButton(text="« Назад", callback_data="wo:back")])
+    rows.append([InlineKeyboardButton(text=ui.BTN_REP_FAIL, callback_data="wo:r:0")])
+    rows.append([InlineKeyboardButton(text=ui.BTN_ENTER_REPS, callback_data="wo:r:custom")])
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="wo:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -200,20 +201,17 @@ def sets_kb(target_sets: int, last_sets: int | None = None) -> InlineKeyboardMar
     options = sorted(set(options))
     row = [InlineKeyboardButton(text=str(s), callback_data=f"wo:s:{s}") for s in options]
     return InlineKeyboardMarkup(
-        inline_keyboard=[row, [InlineKeyboardButton(text="« Назад", callback_data="wo:back")]]
+        inline_keyboard=[row, [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="wo:back")]]
     )
 
 
 def after_set_kb(target_sets: int, done_sets: int) -> InlineKeyboardMarkup:
-    more = "Ещё подход"
-    if target_sets and done_sets < target_sets:
-        more = f"Ещё подход ({done_sets}/{target_sets})"
+    more = ui.more_set_label(target_sets, done_sets)
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=more, callback_data="wo:more")],
-            [InlineKeyboardButton(text="Дропсет (другой вес в этом подходе)", callback_data="wo:drop")],
-            [InlineKeyboardButton(text="Готово по упражнению", callback_data="wo:exdone")],
-            [InlineKeyboardButton(text="Отменить последний кусок", callback_data="wo:undo")],
+            [InlineKeyboardButton(text=ui.BTN_EX_DONE, callback_data="wo:exdone")],
+            [InlineKeyboardButton(text=ui.BTN_UNDO_SET, callback_data="wo:undo")],
         ]
     )
 
@@ -222,15 +220,15 @@ def difficulty_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="Легко", callback_data=f"wo:d:{Difficulty.easy.value}"),
-                InlineKeyboardButton(text="Норм", callback_data=f"wo:d:{Difficulty.normal.value}"),
+                InlineKeyboardButton(text=ui.BTN_EASY, callback_data=f"wo:d:{Difficulty.easy.value}"),
+                InlineKeyboardButton(text=ui.BTN_NORMAL, callback_data=f"wo:d:{Difficulty.normal.value}"),
             ],
             [
-                InlineKeyboardButton(text="Тяжело", callback_data=f"wo:d:{Difficulty.hard.value}"),
-                InlineKeyboardButton(text="Отказ", callback_data=f"wo:d:{Difficulty.failure.value}"),
+                InlineKeyboardButton(text=ui.BTN_HARD, callback_data=f"wo:d:{Difficulty.hard.value}"),
+                InlineKeyboardButton(text=ui.BTN_FAILURE, callback_data=f"wo:d:{Difficulty.failure.value}"),
             ],
-            [InlineKeyboardButton(text="Заметка", callback_data="wo:note")],
-            [InlineKeyboardButton(text="« Назад", callback_data="wo:back")],
+            [InlineKeyboardButton(text=ui.BTN_NOTE, callback_data="wo:note")],
+            [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="wo:back")],
         ]
     )
 
@@ -238,24 +236,24 @@ def difficulty_kb() -> InlineKeyboardMarkup:
 def admin_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Шаблоны дней", callback_data="adm:templates")],
-            [InlineKeyboardButton(text="Архив упражнений", callback_data="adm:archive")],
-            [InlineKeyboardButton(text="График недели", callback_data="adm:schedule")],
-            [InlineKeyboardButton(text="Часы напоминаний", callback_data="adm:hours")],
-            [InlineKeyboardButton(text="История атлетов", callback_data="hist:athletes:adm")],
-            [InlineKeyboardButton(text="Кто не залогировал", callback_data="adm:missing")],
-            [InlineKeyboardButton(text="Пользователи", callback_data="adm:users")],
+            [InlineKeyboardButton(text=ui.BTN_ADM_TEMPLATES, callback_data="adm:templates")],
+            [InlineKeyboardButton(text=ui.BTN_ADM_ARCHIVE, callback_data="adm:archive")],
+            [InlineKeyboardButton(text=ui.BTN_ADM_SCHEDULE, callback_data="adm:schedule")],
+            [InlineKeyboardButton(text=ui.BTN_ADM_HOURS, callback_data="adm:hours")],
+            [InlineKeyboardButton(text=ui.BTN_ADM_ATHLETES_HIST, callback_data="hist:athletes:adm")],
+            [InlineKeyboardButton(text=ui.BTN_ADM_MISSING, callback_data="adm:missing")],
+            [InlineKeyboardButton(text=ui.BTN_ADM_USERS, callback_data="adm:users")],
         ]
     )
 
 
 def templates_list_kb(templates: list) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=t.name, callback_data=f"adm:tpl:{t.id}")]
+        [InlineKeyboardButton(text=f"📋 {t.name}", callback_data=f"adm:tpl:{t.id}")]
         for t in templates
     ]
-    rows.append([InlineKeyboardButton(text="+ Новый шаблон", callback_data="adm:tpl:new")])
-    rows.append([InlineKeyboardButton(text="« Назад", callback_data="adm:home")])
+    rows.append([InlineKeyboardButton(text="➕ Новый шаблон", callback_data="adm:tpl:new")])
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -271,23 +269,23 @@ def template_detail_kb(template_id: int, exercises: list | None = None) -> Inlin
             ]
         )
     rows.append(
-        [InlineKeyboardButton(text="+ Упражнение", callback_data=f"adm:ex:add:{template_id}")]
+        [InlineKeyboardButton(text="➕ Упражнение", callback_data=f"adm:ex:add:{template_id}")]
     )
     rows.append(
-        [InlineKeyboardButton(text="Удалить шаблон", callback_data=f"adm:tpl:del:{template_id}")]
+        [InlineKeyboardButton(text="🗑️ Удалить шаблон", callback_data=f"adm:tpl:del:{template_id}")]
     )
-    rows.append([InlineKeyboardButton(text="« К шаблонам", callback_data="adm:templates")])
+    rows.append([InlineKeyboardButton(text="⬅️ К шаблонам", callback_data="adm:templates")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def exercise_edit_kb(exercise_id: int, template_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Переименовать", callback_data=f"adm:ex:name:{exercise_id}")],
-            [InlineKeyboardButton(text="Цели (подходы/повторы)", callback_data=f"adm:ex:tgt:{exercise_id}")],
-            [InlineKeyboardButton(text="В другой шаблон", callback_data=f"adm:ex:move:{exercise_id}")],
-            [InlineKeyboardButton(text="Удалить упражнение", callback_data=f"adm:ex:del:{exercise_id}")],
-            [InlineKeyboardButton(text="« К шаблону", callback_data=f"adm:tpl:{template_id}")],
+            [InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"adm:ex:name:{exercise_id}")],
+            [InlineKeyboardButton(text="🎯 Цели (подходы/повторы)", callback_data=f"adm:ex:tgt:{exercise_id}")],
+            [InlineKeyboardButton(text="↗️ В другой шаблон", callback_data=f"adm:ex:move:{exercise_id}")],
+            [InlineKeyboardButton(text="🗑️ Удалить упражнение", callback_data=f"adm:ex:del:{exercise_id}")],
+            [InlineKeyboardButton(text="⬅️ К шаблону", callback_data=f"adm:tpl:{template_id}")],
         ]
     )
 
@@ -296,10 +294,10 @@ def exercise_delete_confirm_kb(exercise_id: int, template_id: int) -> InlineKeyb
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="Да, удалить", callback_data=f"adm:ex:delok:{exercise_id}"),
-                InlineKeyboardButton(text="Отмена", callback_data=f"adm:ex:view:{exercise_id}"),
+                InlineKeyboardButton(text="🗑️ Да, удалить", callback_data=f"adm:ex:delok:{exercise_id}"),
+                InlineKeyboardButton(text=ui.BTN_CANCEL, callback_data=f"adm:ex:view:{exercise_id}"),
             ],
-            [InlineKeyboardButton(text="« К шаблону", callback_data=f"adm:tpl:{template_id}")],
+            [InlineKeyboardButton(text="⬅️ К шаблону", callback_data=f"adm:tpl:{template_id}")],
         ]
     )
 
@@ -310,7 +308,7 @@ def exercise_move_kb(exercise_id: int, templates: list, current_template_id: int
         for t in templates
         if t.id != current_template_id
     ]
-    rows.append([InlineKeyboardButton(text="« Назад", callback_data=f"adm:ex:view:{exercise_id}")])
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data=f"adm:ex:view:{exercise_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -322,12 +320,12 @@ def schedule_kb(assignments: dict[int, str]) -> InlineKeyboardMarkup:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{label}: {current}",
+                    text=f"📅 {label}: {current}",
                     callback_data=f"adm:sch:{weekday}",
                 )
             ]
         )
-    rows.append([InlineKeyboardButton(text="« Назад", callback_data="adm:home")])
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -337,9 +335,9 @@ def schedule_pick_template_kb(weekday: int, templates: list) -> InlineKeyboardMa
         for t in templates
     ]
     rows.append(
-        [InlineKeyboardButton(text="Очистить день", callback_data=f"adm:schclear:{weekday}")]
+        [InlineKeyboardButton(text="🧹 Очистить день", callback_data=f"adm:schclear:{weekday}")]
     )
-    rows.append([InlineKeyboardButton(text="« Назад", callback_data="adm:schedule")])
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:schedule")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -373,9 +371,9 @@ def archive_pick_kb(template_id: int, items: list, page: int = 0) -> InlineKeybo
     ]
     rows.extend(_page_nav(page, len(items), f"adm:ex:pick:{template_id}"))
     rows.append(
-        [InlineKeyboardButton(text="+ Новое упражнение", callback_data=f"adm:ex:new:{template_id}")]
+        [InlineKeyboardButton(text="➕ Новое упражнение", callback_data=f"adm:ex:new:{template_id}")]
     )
-    rows.append([InlineKeyboardButton(text="« К шаблону", callback_data=f"adm:tpl:{template_id}")])
+    rows.append([InlineKeyboardButton(text="⬅️ К шаблону", callback_data=f"adm:tpl:{template_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -387,34 +385,34 @@ def archive_list_kb(items: list, page: int = 0) -> InlineKeyboardMarkup:
         for item in chunk
     ]
     if not chunk:
-        rows.append([InlineKeyboardButton(text="Пока пусто", callback_data="adm:noop")])
+        rows.append([InlineKeyboardButton(text="📭 Пока пусто", callback_data="adm:noop")])
     rows.extend(_page_nav(page, len(items), "adm:arch:p"))
-    rows.append([InlineKeyboardButton(text="« Назад", callback_data="adm:home")])
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def archive_item_kb(item_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Удалить из архива", callback_data=f"adm:arch:del:{item_id}")],
-            [InlineKeyboardButton(text="« К архиву", callback_data="adm:archive")],
+            [InlineKeyboardButton(text="🗑️ Удалить из архива", callback_data=f"adm:arch:del:{item_id}")],
+            [InlineKeyboardButton(text="⬅️ К архиву", callback_data="adm:archive")],
         ]
     )
 
 
 def history_home_kb(*, is_admin: bool = False, viewing_other: bool = False) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text="Последние тренировки", callback_data="hist:sessions")],
-        [InlineKeyboardButton(text="По упражнениям", callback_data="hist:exercises")],
+        [InlineKeyboardButton(text=ui.BTN_HIST_SESSIONS, callback_data="hist:sessions")],
+        [InlineKeyboardButton(text=ui.BTN_HIST_EXERCISES, callback_data="hist:exercises")],
     ]
     if viewing_other:
-        rows.append([InlineKeyboardButton(text="Сводка за неделю", callback_data="hist:week")])
-        rows.append([InlineKeyboardButton(text="« К атлетам", callback_data="hist:athletes")])
+        rows.append([InlineKeyboardButton(text=ui.BTN_HIST_WEEK, callback_data="hist:week")])
+        rows.append([InlineKeyboardButton(text=ui.BTN_HIST_ATHLETES, callback_data="hist:athletes")])
     else:
-        rows.append([InlineKeyboardButton(text="Править последнюю", callback_data="hist:editlast")])
+        rows.append([InlineKeyboardButton(text=ui.BTN_HIST_EDIT_LAST, callback_data="hist:editlast")])
         if is_admin:
             rows.append(
-                [InlineKeyboardButton(text="Чужая история", callback_data="hist:athletes")]
+                [InlineKeyboardButton(text=ui.BTN_HIST_OTHERS, callback_data="hist:athletes")]
             )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -430,7 +428,7 @@ def history_athletes_kb(
     chunk = users[start : start + page_size]
     rows = []
     for u in chunk:
-        mark = "★ " if getattr(u, "is_admin", False) else ""
+        mark = "⭐ " if getattr(u, "is_admin", False) else "👤 "
         rows.append(
             [
                 InlineKeyboardButton(
@@ -450,8 +448,8 @@ def history_athletes_kb(
     if nav:
         rows.append(nav)
     if not chunk:
-        rows.append([InlineKeyboardButton(text="Пока никого", callback_data="adm:noop")])
-    back_label = "« В админку" if back == "adm:home" else "« Моя история"
+        rows.append([InlineKeyboardButton(text="📭 Пока никого", callback_data="adm:noop")])
+    back_label = ui.BTN_HIST_ADMIN if back == "adm:home" else ui.BTN_HIST_MY
     rows.append([InlineKeyboardButton(text=back_label, callback_data=back)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -463,14 +461,14 @@ def history_sessions_kb(sessions: list, *, back: str = "hist:home") -> InlineKey
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{ws.session_date.isoformat()} · {title}",
+                    text=f"📅 {ws.session_date.isoformat()} · {title}",
                     callback_data=f"hist:s:{ws.id}",
                 )
             ]
         )
     if not rows:
-        rows.append([InlineKeyboardButton(text="Пока пусто", callback_data="adm:noop")])
-    rows.append([InlineKeyboardButton(text="« Назад", callback_data=back)])
+        rows.append([InlineKeyboardButton(text="📭 Пока пусто", callback_data="adm:noop")])
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data=back)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -479,7 +477,7 @@ def history_exercises_kb(names: list[str], page: int = 0, *, back: str = "hist:h
     start = page * page_size
     chunk = names[start : start + page_size]
     rows = [
-        [InlineKeyboardButton(text=name, callback_data=f"hist:e:{start + offset}")]
+        [InlineKeyboardButton(text=f"💪 {name}", callback_data=f"hist:e:{start + offset}")]
         for offset, name in enumerate(chunk)
     ]
     nav = []
@@ -493,8 +491,8 @@ def history_exercises_kb(names: list[str], page: int = 0, *, back: str = "hist:h
     if nav:
         rows.append(nav)
     if not chunk:
-        rows.append([InlineKeyboardButton(text="Пока пусто", callback_data="adm:noop")])
-    rows.append([InlineKeyboardButton(text="« Назад", callback_data=back)])
+        rows.append([InlineKeyboardButton(text="📭 Пока пусто", callback_data="adm:noop")])
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data=back)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -502,9 +500,9 @@ def history_session_detail_kb(session_id: int, *, can_edit: bool, back: str = "h
     rows = []
     if can_edit:
         rows.append(
-            [InlineKeyboardButton(text="Править подходы", callback_data=f"hist:edit:{session_id}")]
+            [InlineKeyboardButton(text=ui.BTN_HIST_EDIT_SETS, callback_data=f"hist:edit:{session_id}")]
         )
-    rows.append([InlineKeyboardButton(text="« Назад", callback_data=back)])
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data=back)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -517,23 +515,23 @@ def history_edit_sets_kb(sets: list, session_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=label[:64], callback_data=f"hist:es:{s.id}")]
         )
     if not rows:
-        rows.append([InlineKeyboardButton(text="Пусто", callback_data="adm:noop")])
-    rows.append([InlineKeyboardButton(text="« К тренировке", callback_data=f"hist:s:{session_id}")])
+        rows.append([InlineKeyboardButton(text="📭 Пусто", callback_data="adm:noop")])
+    rows.append([InlineKeyboardButton(text="⬅️ К тренировке", callback_data=f"hist:s:{session_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def history_edit_set_kb(set_id: int, session_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Изменить вес", callback_data=f"hist:ew:{set_id}")],
-            [InlineKeyboardButton(text="Изменить повторы", callback_data=f"hist:er:{set_id}")],
-            [InlineKeyboardButton(text="Удалить подход", callback_data=f"hist:edel:{set_id}")],
-            [InlineKeyboardButton(text="« К подходам", callback_data=f"hist:edit:{session_id}")],
+            [InlineKeyboardButton(text="⚖️ Изменить вес", callback_data=f"hist:ew:{set_id}")],
+            [InlineKeyboardButton(text="🔢 Изменить повторы", callback_data=f"hist:er:{set_id}")],
+            [InlineKeyboardButton(text="🗑️ Удалить подход", callback_data=f"hist:edel:{set_id}")],
+            [InlineKeyboardButton(text="⬅️ К подходам", callback_data=f"hist:edit:{session_id}")],
         ]
     )
 
 
 def history_back_kb(to: str = "hist:home") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="« Назад", callback_data=to)]]
+        inline_keyboard=[[InlineKeyboardButton(text=ui.BTN_BACK, callback_data=to)]]
     )

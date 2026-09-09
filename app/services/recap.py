@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from app.db.models import SessionStatus, WorkoutSession, WorkoutTemplate
 from app.services.progression import DIFFICULTY_LABELS, format_session_exercise
+from app import ui_copy as ui
 
 
 async def build_group_recap(session: AsyncSession, template: WorkoutTemplate, day: date) -> str:
@@ -32,7 +33,7 @@ async def build_group_recap(session: AsyncSession, template: WorkoutTemplate, da
     )
     sessions = list(result.scalars().all())
     if not sessions:
-        return f"#{template.hashtag}\nПока никто не залогировал тренировку."
+        return f"{ui.ICO_RECAP} #{template.hashtag}\nПока никто не залогировал тренировку."
 
     by_exercise: dict[str, list[str]] = defaultdict(list)
     order: list[str] = []
@@ -48,7 +49,7 @@ async def build_group_recap(session: AsyncSession, template: WorkoutTemplate, da
             diff = DIFFICULTY_LABELS[rows[-1].difficulty]
             by_exercise[name].append(f"{code} {format_session_exercise(rows)} {diff}")
 
-    lines = [f"#{template.hashtag}"]
+    lines = [f"{ui.ICO_RECAP} #{template.hashtag}"]
     for name in order:
         lines.append(name)
         lines.extend(by_exercise[name])
@@ -94,7 +95,7 @@ async def build_personal_retrospective(
 
     cur_volume = sum(s.volume for s in current.sets)
     lines = [
-        f"Ретроспектива: {title}",
+        f"{ui.ICO_MAP} Ретроспектива: {title}",
         f"Упражнений: {len(grouped_cur)}",
         f"Объём: {cur_volume:g} кг·повт",
     ]

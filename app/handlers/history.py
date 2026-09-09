@@ -5,6 +5,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from app import ui_copy as ui
 from app.config import get_settings
 from app.db.session import SessionLocal
 from app.filters import PrivateChat
@@ -78,11 +79,11 @@ async def _target_context(state: FSMContext, viewer) -> tuple[int, str, bool]:
 def _home_text(*, viewing_other: bool, label: str) -> str:
     if viewing_other:
         return (
-            f"История атлета: {label}\n"
+            f"{ui.ICO_HISTORY} История атлета: {label}\n"
             "Тренировки и упражнения — как у него в личке."
         )
     return (
-        "Твоя история тренировок и упражнений.\n"
+        f"{ui.ICO_HISTORY} Твоя история тренировок и упражнений.\n"
         "Программа общая, результаты — только твои."
     )
 
@@ -92,7 +93,7 @@ def _section_back(viewing_other: bool) -> str:
 
 
 @router.message(Command("history"))
-@router.message(F.text == "История")
+@router.message(F.text == ui.BTN_HISTORY)
 async def history_home(message: Message, state: FSMContext) -> None:
     await state.clear()
     user = await _viewer(message)

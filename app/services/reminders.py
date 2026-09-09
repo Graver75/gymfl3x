@@ -14,6 +14,7 @@ from app.db.models import GroupChat, RecapSent, ScheduleDay, WorkoutTemplate
 from app.db.session import SessionLocal
 from app.services.recap import build_group_recap
 from app.services.history import format_missing_today
+from app import ui_copy as ui
 
 
 WEEKDAY_NAMES = (
@@ -75,10 +76,10 @@ async def send_morning_reminders(bot: Bot, settings: Settings) -> None:
         me = await bot.get_me()
         deep_link = f"https://t.me/{me.username}?start=workout"
         kb = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="Открыть бота", url=deep_link)]]
+            inline_keyboard=[[InlineKeyboardButton(text=ui.BTN_OPEN_BOT, url=deep_link)]]
         )
         text = (
-            f"Сегодня {WEEKDAY_NAMES[weekday]} — {template.name}\n"
+            f"{ui.ICO_FIRE} Сегодня {WEEKDAY_NAMES[weekday]} — {template.name}\n"
             f"#{template.hashtag}\n\n"
             f"{exercise_lines}\n\n"
             "Логируем в личке с ботом кнопками."
@@ -114,7 +115,7 @@ async def send_evening_recaps(bot: Bot, settings: Settings) -> None:
         ).scalars().all()
         text = await build_group_recap(session, template, today)
         missing = await format_missing_today(session, today, template.id)
-        if not missing.startswith("Все онборждённые"):
+        if "Все онборждённые" not in missing:
             text = f"{missing}\n\n{text}"
 
         for group in groups:

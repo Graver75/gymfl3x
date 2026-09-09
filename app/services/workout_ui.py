@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.db.models import TemplateExercise, UserExerciseState, WorkoutSession, WorkoutTemplate
+from app import ui_copy as ui
 
 
 @dataclass
@@ -39,8 +40,8 @@ def rest_line(data: dict) -> str:
     minutes, seconds = divmod(elapsed, 60)
     if minutes >= 60:
         hours, minutes = divmod(minutes, 60)
-        return f"\nОтдых: {hours}:{minutes:02d}:{seconds:02d}"
-    return f"\nОтдых: {minutes}:{seconds:02d}"
+        return f"\n{ui.ICO_REST} Отдых: {hours}:{minutes:02d}:{seconds:02d}"
+    return f"\n{ui.ICO_REST} Отдых: {minutes}:{seconds:02d}"
 
 
 async def weight_hints_for_user(session, user_id: int, exercises: list) -> dict[int, float]:
@@ -71,12 +72,12 @@ def next_exercise_id(exercises: list, done_ids: set[int]) -> int | None:
 def session_map_text(template_name: str, exercises: list, done_ids: set[int]) -> str:
     total = len(exercises)
     done = sum(1 for ex in exercises if ex.id in done_ids)
-    lines = [f"{template_name}", f"Прогресс: {done}/{total}", ""]
+    lines = [f"{ui.ICO_MAP} {template_name}", f"Прогресс: {done}/{total}", ""]
     for ex in exercises:
         if ex.id in done_ids:
-            mark = "✅"
+            mark = ui.ICO_DONE
         elif next_exercise_id(exercises, done_ids) == ex.id:
-            mark = "➡️"
+            mark = ui.ICO_NEXT
         else:
             mark = "▫️"
         lines.append(

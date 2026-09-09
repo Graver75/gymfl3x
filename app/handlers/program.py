@@ -9,6 +9,7 @@ from aiogram.types import Message
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from app import ui_copy as ui
 from app.config import get_settings
 from app.db.models import ScheduleDay, WorkoutTemplate
 from app.db.session import SessionLocal
@@ -36,7 +37,7 @@ async def _ensure_onboarded(message: Message) -> bool:
 
 
 def _format_template(template: WorkoutTemplate) -> str:
-    lines = [f"{template.name} (#{template.hashtag})"]
+    lines = [f"{ui.ICO_EXERCISE} {template.name} (#{template.hashtag})"]
     if not template.exercises:
         lines.append("  (упражнений пока нет)")
     for ex in template.exercises:
@@ -49,7 +50,7 @@ def _format_template(template: WorkoutTemplate) -> str:
 
 
 @router.message(Command("program"))
-@router.message(F.text == "Программа")
+@router.message(F.text == ui.BTN_PROGRAM)
 async def show_program(message: Message) -> None:
     if not await _ensure_onboarded(message):
         return
@@ -69,11 +70,11 @@ async def show_program(message: Message) -> None:
         ).scalars().all()
 
     if not templates:
-        await message.answer("Программа ещё не задана. Админ: кнопка «Админка».")
+        await message.answer(f"Программа ещё не задана. Админ: кнопка «{ui.BTN_ADMIN}».")
         return
 
     by_day = {s.weekday: s.template for s in schedule}
-    lines = ["График недели (read-only):"]
+    lines = [f"{ui.BTN_PROGRAM} График недели (read-only):"]
     for weekday in range(7):
         tpl = by_day.get(weekday)
         label = tpl.name if tpl else "отдых"
@@ -89,7 +90,7 @@ async def show_program(message: Message) -> None:
 
 
 @router.message(Command("today"))
-@router.message(F.text == "Сегодня")
+@router.message(F.text == ui.BTN_TODAY)
 async def show_today(message: Message) -> None:
     if not await _ensure_onboarded(message):
         return
@@ -103,12 +104,12 @@ async def show_today(message: Message) -> None:
 
     if not template:
         await message.answer(
-            f"Сегодня {WEEKDAY_NAMES[weekday]} — по графику отдых / день не назначен."
+            f"{ui.BTN_TODAY} {WEEKDAY_NAMES[weekday]} — по графику отдых / день не назначен."
         )
         return
 
     await message.answer(
-        f"Сегодня {WEEKDAY_NAMES[weekday]} — {template.name}\n#{template.hashtag}\n\n"
+        f"{ui.BTN_TODAY} {WEEKDAY_NAMES[weekday]} — {template.name}\n#{template.hashtag}\n\n"
         + _format_template(template)
-        + "\n\nЖми «Тренировка», чтобы логировать."
+        + f"\n\nЖми «{ui.BTN_WORKOUT}», чтобы логировать."
     )

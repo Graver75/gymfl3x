@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 from app.db.models import SessionSet, SessionStatus, WorkoutSession
 from app.services.archive import name_key
 from app.services.progression import DIFFICULTY_LABELS, format_session_exercise
+from app import ui_copy as ui
 
 
 @dataclass
@@ -208,50 +209,71 @@ async def build_smart_presets(
             if (s.drop_index or 0) > 0:
                 drop_weights.append(float(s.weight))
 
-    # Prefer last session's main weight for current set number
     same_set_mains = [
         p for p in presets.last_parts if int(p["set_number"]) == set_number and int(p["drop_index"]) == 0
     ]
     same_set_drops = [
         p for p in presets.last_parts if int(p["set_number"]) == set_number and int(p["drop_index"]) > 0
     ]
+
+    # Prefer last session pattern over stale suggested/working when we have history.
     if drop_index > 0 and same_set_drops:
         idx = min(drop_index - 1, len(same_set_drops) - 1)
         presets.default_weight = float(same_set_drops[idx]["weight"])
         presets.default_reps = int(same_set_drops[idx]["reps"]) or None
     elif drop_index > 0:
-        # Нет дропа в истории для этого подхода — вес выставит хендлер (−step).
         presets.default_weight = None
     elif same_set_mains:
         presets.default_weight = float(same_set_mains[0]["weight"])
         presets.default_reps = int(same_set_mains[0]["reps"]) or None
-    elif suggested_weight is not None:
-        presets.default_weight = suggested_weight
-    elif working_weight is not None:
-        presets.default_weight = working_weight
     elif presets.last_parts:
         mains = [p for p in presets.last_parts if int(p["drop_index"]) == 0]
         pick = mains[-1] if mains else presets.last_parts[-1]
         presets.default_weight = float(pick["weight"])
         presets.default_reps = int(pick["reps"]) or None
+    elif suggested_weight is not None:
+        presets.default_weight = suggested_weight
+    elif working_weight is not None:
+        presets.default_weight = working_weight
 
     if presets.default_reps is None and same_set_mains:
         presets.default_reps = int(same_set_mains[0]["reps"]) or None
     if presets.default_reps is None and reps_counter:
         presets.default_reps = reps_counter.most_common(1)[0][0]
 
-    top_weights = [w for w, _ in weight_counter.most_common(6)]
-    last_mains = [float(p["weight"]) for p in presets.last_parts if int(p["drop_index"]) == 0]
-    candidates = []
-    if presets.default_weight is not None:
-        candidates.append(presets.default_weight)
-    candidates.extend(last_mains)
-    candidates.extend(top_weights)
+    base = presets.default_weight
+    if base is None:
+        base = suggested_weight if suggested_weight is not None else working_weight
+    if base is None:
+        base = 20.0
+    presets.default_weight = float(base)
+
+    # Nearby plate steps + history only if close to base (no wild jumps).
+    step = 2.5
+    max_delta = max(step * 4, float(base) * 0.75, 5.0)
+    nearby = [
+        max(0.0, float(base) - step * 2),
+        max(0.0, float(base) - step),
+        float(base),
+        float(base) + step,
+        float(base) + step * 2,
+    ]
+    candidates: list[float | None] = list(nearby)
+    candidates.extend(float(p["weight"]) for p in presets.last_parts)
+    candidates.extend(w for w, _ in weight_counter.most_common(8))
     if suggested_weight is not None:
         candidates.append(suggested_weight)
     if working_weight is not None:
         candidates.append(working_weight)
-    presets.weight_options = _unique_weights(candidates)[:6]
+
+    filtered = [
+        w
+        for w in _unique_weights(candidates)
+        if abs(float(w) - float(base)) <= max_delta + 1e-6
+    ]
+    if float(base) not in filtered:
+        filtered.insert(0, float(base))
+    presets.weight_options = filtered[:6]
 
     top_reps = [r for r, _ in reps_counter.most_common(6)]
     reps_candidates = [8, 10, 12, 15]
@@ -260,7 +282,13 @@ async def build_smart_presets(
     reps_candidates.extend(top_reps)
     presets.reps_options = _unique_ints(reps_candidates)[:6]
 
-    presets.last_drop_weights = _unique_weights(drop_weights + [float(p["weight"]) for p in same_set_drops])[:4]
+    presets.last_drop_weights = _unique_weights(
+        [
+            w
+            for w in drop_weights + [float(p["weight"]) for p in same_set_drops]
+            if abs(float(w) - float(base)) <= max_delta + 1e-6
+        ]
+    )[:4]
     return presets
 
 
@@ -293,7 +321,7 @@ def _unique_ints(values: list[int | None]) -> list[int]:
 
 def format_session_history(ws: WorkoutSession) -> str:
     title = ws.template.name if ws.template else "Тренировка"
-    lines = [f"{title} · {ws.session_date.isoformat()}"]
+    lines = [f"{ui.ICO_HISTORY} {title} · {ws.session_date.isoformat()}"]
     grouped: dict[str, list] = defaultdict(list)
     for s in ws.sets:
         grouped[s.exercise_name].append(s)
@@ -302,7 +330,7 @@ def format_session_history(ws: WorkoutSession) -> str:
         return "\n".join(lines)
     for name, rows in grouped.items():
         diff = DIFFICULTY_LABELS.get(rows[-1].difficulty, "")
-        lines.append(f"{name}\n  {format_session_exercise(rows)} {diff}".rstrip())
+        lines.append(f"{ui.ICO_EXERCISE} {name}\n  {format_session_exercise(rows)} {diff}".rstrip())
     return "\n".join(lines)
 
 
@@ -321,12 +349,12 @@ async def format_exercise_history(
         limit=limit,
     )
     if not history:
-        return f"{exercise_name}\nПока нет записей."
+        return f"{ui.label_exercise(exercise_name)}\nПока нет записей."
     pr = await exercise_personal_records(session, user_id, exercise_name=exercise_name)
-    lines = [exercise_name]
+    lines = [ui.label_exercise(exercise_name)]
     if pr["best_weight"] is not None:
         lines.append(
-            f"PR: {pr['best_weight']:g} кг · лучший сет {pr['best_reps']}×{pr['best_set_weight']:g}"
+            f"{ui.ICO_PR} PR: {pr['best_weight']:g} кг · лучший сет {pr['best_reps']}×{pr['best_set_weight']:g}"
         )
     lines.append("")
     for ws in history:
@@ -460,7 +488,7 @@ async def format_athlete_week(session: AsyncSession, user_id: int, *, days: int 
         .order_by(WorkoutSession.session_date.desc(), WorkoutSession.id.desc())
     )
     sessions = list(result.scalars().all())
-    lines = [f"Неделя · {label}", f"Сессий: {len(sessions)}"]
+    lines = [f"{ui.ICO_HISTORY} Неделя · {label}", f"Сессий: {len(sessions)}"]
     if not sessions:
         lines.append("Пока пусто.")
         return "\n".join(lines)
@@ -513,8 +541,8 @@ async def list_athletes_missing_today(
 async def format_missing_today(session: AsyncSession, day, template_id: int | None) -> str:
     missing = await list_athletes_missing_today(session, day, template_id=template_id)
     if not missing:
-        return "Все онборждённые уже залогировали сегодня. Красавцы."
-    lines = ["Ещё не залогировали сегодня:"]
+        return f"{ui.ICO_DONE} Все онборждённые уже залогировали сегодня. Красавцы."
+    lines = [f"{ui.ICO_FIRE} Ещё не залогировали сегодня:"]
     for u in missing:
         lines.append(f"• {u.short_code} · {u.display_name}")
     return "\n".join(lines)

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.db.models import GroupChat
 from app.db.session import SessionLocal
+from app import ui_copy as ui
 
 router = Router(name="group")
 
@@ -41,7 +42,7 @@ async def bot_added_to_group(event: ChatMemberUpdated, bot: Bot) -> None:
     try:
         await bot.send_message(
             chat.id,
-            "Gymflex на связи.\n"
+            f"{ui.ICO_FIRE} Gymflex на связи.\n"
             "Утром в тренировочный день напомню программу,\n"
             "вечером пришлю сводку в формате #деньспины.\n"
             "Логируйте подходы в личке с ботом.",

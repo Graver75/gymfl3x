@@ -10,6 +10,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from app import ui_copy as ui
 from app.config import get_settings
 from app.db.models import (
     ExerciseArchive,
@@ -120,7 +121,7 @@ def _exercise_text(ex: TemplateExercise, template_name: str) -> str:
 
 
 @router.message(Command("admin"))
-@router.message(F.text == "Админка")
+@router.message(F.text == ui.BTN_ADMIN)
 async def admin_home(message: Message, state: FSMContext) -> None:
     if message.from_user is None:
         return
@@ -132,7 +133,7 @@ async def admin_home(message: Message, state: FSMContext) -> None:
         await _deny(message)
         return
     await state.clear()
-    await message.answer("Админка Gymflex:", reply_markup=admin_menu_kb())
+    await message.answer(f"{ui.ICO_ADMIN} Админка Gymflex:", reply_markup=admin_menu_kb())
 
 
 @router.callback_query(F.data == "adm:home")
@@ -144,7 +145,7 @@ async def adm_home_cb(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("Нет доступа", show_alert=True)
         return
     await state.clear()
-    await callback.message.edit_text("Админка Gymflex:", reply_markup=admin_menu_kb())
+    await callback.message.edit_text(f"{ui.ICO_ADMIN} Админка Gymflex:", reply_markup=admin_menu_kb())
     await callback.answer()
 
 
@@ -159,7 +160,7 @@ async def adm_templates(callback: CallbackQuery, state: FSMContext) -> None:
     async with SessionLocal() as session:
         templates = (await session.execute(select(WorkoutTemplate))).scalars().all()
     await callback.message.edit_text(
-        "Шаблоны тренировочных дней:",
+        f"{ui.BTN_ADM_TEMPLATES}:",
         reply_markup=templates_list_kb(templates),
     )
     await callback.answer()
@@ -707,7 +708,7 @@ async def adm_archive(callback: CallbackQuery) -> None:
     async with SessionLocal() as session:
         items = await list_archive(session)
     await callback.message.edit_text(
-        "Архив упражнений. Сюда попадает всё, что когда-либо было в программе или в логе.\n"
+        f"{ui.BTN_ADM_ARCHIVE}. Сюда попадает всё, что когда-либо было в программе или в логе.\n"
         "Удаление из шаблона архив не трогает.",
         reply_markup=archive_list_kb(items, page),
     )
@@ -798,7 +799,7 @@ async def adm_schedule(callback: CallbackQuery) -> None:
         ).scalars().all()
     assignments = {d.weekday: d.template.name for d in days}
     await callback.message.edit_text(
-        "График на неделю (нажми день, чтобы назначить шаблон):",
+        f"{ui.BTN_ADM_SCHEDULE} (нажми день, чтобы назначить шаблон):",
         reply_markup=schedule_kb(assignments),
     )
     await callback.answer()
@@ -898,6 +899,7 @@ async def adm_hours(callback: CallbackQuery, state: FSMContext) -> None:
     rec = group.recap_hour if group else settings.recap_hour
     await state.set_state(AdminSG.set_hours)
     await callback.message.answer(
+        f"{ui.BTN_ADM_HOURS}\n"
         f"Сейчас: напоминание {rem}:00, сводка {rec}:00 ({settings.timezone}).\n"
         "Пришли два числа через пробел, например: 8 22"
     )
@@ -969,7 +971,7 @@ async def adm_users(callback: CallbackQuery) -> None:
     if not users:
         text = "Пользователей пока нет."
     else:
-        lines = ["Пользователи:"]
+        lines = [f"{ui.BTN_ADM_USERS}:"]
         for u in users:
             flag = " [admin]" if u.is_admin else ""
             done = "✓" if u.onboarding_done else "…"
