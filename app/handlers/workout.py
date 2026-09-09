@@ -641,6 +641,10 @@ async def workout_back(callback: CallbackQuery, state: FSMContext) -> None:
             )
             template = result.scalar_one()
             done = await _done_exercise_ids(ws) if ws else set()
+        await callback.message.edit_text(
+            "Выбери упражнение:",
+            reply_markup=workout_exercise_kb(template.exercises, done),
+        )
     await callback.answer()
 
 
