@@ -14,6 +14,7 @@ class WorkoutSG(StatesGroup):
     weight = State()
     custom_weight = State()
     reps = State()
+    custom_reps = State()
     after_set = State()
     difficulty = State()
 

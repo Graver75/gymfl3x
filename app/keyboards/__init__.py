@@ -112,6 +112,7 @@ def reps_kb(target_min: int, target_max: int, last_reps: int | None = None) -> I
     # split into rows of 4
     rows = [row[i : i + 4] for i in range(0, len(row), 4)]
     rows.append([InlineKeyboardButton(text="Отказ", callback_data="wo:r:0")])
+    rows.append([InlineKeyboardButton(text="Ввести число", callback_data="wo:r:custom")])
     rows.append([InlineKeyboardButton(text="« Назад", callback_data="wo:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

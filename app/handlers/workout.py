@@ -313,11 +313,45 @@ async def custom_weight(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.callback_query(WorkoutSG.reps, F.data.startswith("wo:r:"))
+@router.callback_query(WorkoutSG.reps, F.data == "wo:r:custom")
+async def custom_reps_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None:
+        return
+    await state.set_state(WorkoutSG.custom_reps)
+    await callback.message.answer("Введи число повторений, например 11 или 7")
+    await callback.answer()
+
+
+@router.message(WorkoutSG.custom_reps)
+async def custom_reps(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    try:
+        reps = int((message.text or "").strip())
+        if reps < 0 or reps > 200:
+            raise ValueError
+    except ValueError:
+        await message.answer("Целое число повторений, например 11.")
+        return
+    await _append_reps_and_continue(message, state, reps)
+
+
+@router.callback_query(WorkoutSG.reps, F.data.regexp(r"^wo:r:\d+$"))
 async def pick_reps(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.data is None or callback.message is None or callback.from_user is None:
         return
     reps = int(callback.data.split(":")[-1])
+    await _append_reps_and_continue(callback.message, state, reps, edit=True)
+    await callback.answer()
+
+
+async def _append_reps_and_continue(
+    target: Message,
+    state: FSMContext,
+    reps: int,
+    *,
+    edit: bool = False,
+) -> None:
     data = await state.get_data()
     logged = list(data.get("logged") or [])
     logged.append(
@@ -336,12 +370,12 @@ async def pick_reps(callback: CallbackQuery, state: FSMContext) -> None:
         target_sets = exercise.target_sets if exercise else 3
         name = exercise.name if exercise else "Упражнение"
 
-    done = _unique_set_count(logged)
-    await callback.message.edit_text(
-        f"{name}\n{format_logged_parts(logged)}\n\nЧто дальше?",
-        reply_markup=after_set_kb(target_sets, done),
-    )
-    await callback.answer()
+    text = f"{name}\n{format_logged_parts(logged)}\n\nЧто дальше?"
+    kb = after_set_kb(target_sets, _unique_set_count(logged))
+    if edit:
+        await target.edit_text(text, reply_markup=kb)
+    else:
+        await target.answer(text, reply_markup=kb)
 
 
 @router.callback_query(WorkoutSG.after_set, F.data == "wo:more")
@@ -599,7 +633,7 @@ async def workout_back(callback: CallbackQuery, state: FSMContext) -> None:
             f"{name}\n{format_logged_parts(logged)}\n\nЧто дальше?",
             reply_markup=after_set_kb(target_sets, _unique_set_count(logged)),
         )
-    elif current == WorkoutSG.reps.state:
+    elif current in {WorkoutSG.reps.state, WorkoutSG.custom_reps.state}:
         await state.set_state(WorkoutSG.weight)
         async with SessionLocal() as session:
             exercise = await session.get(TemplateExercise, data["exercise_id"])
