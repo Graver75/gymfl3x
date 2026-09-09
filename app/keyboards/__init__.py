@@ -188,6 +188,7 @@ def admin_menu_kb() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Архив упражнений", callback_data="adm:archive")],
             [InlineKeyboardButton(text="График недели", callback_data="adm:schedule")],
             [InlineKeyboardButton(text="Часы напоминаний", callback_data="adm:hours")],
+            [InlineKeyboardButton(text="История атлетов", callback_data="hist:athletes:adm")],
             [InlineKeyboardButton(text="Пользователи", callback_data="adm:users")],
         ]
     )
@@ -346,16 +347,58 @@ def archive_item_kb(item_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def history_home_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="Последние тренировки", callback_data="hist:sessions")],
-            [InlineKeyboardButton(text="По упражнениям", callback_data="hist:exercises")],
-        ]
-    )
+def history_home_kb(*, is_admin: bool = False, viewing_other: bool = False) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="Последние тренировки", callback_data="hist:sessions")],
+        [InlineKeyboardButton(text="По упражнениям", callback_data="hist:exercises")],
+    ]
+    if viewing_other:
+        rows.append([InlineKeyboardButton(text="« К атлетам", callback_data="hist:athletes")])
+    elif is_admin:
+        rows.append(
+            [InlineKeyboardButton(text="Чужая история", callback_data="hist:athletes")]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def history_sessions_kb(sessions: list) -> InlineKeyboardMarkup:
+def history_athletes_kb(
+    users: list,
+    *,
+    page: int = 0,
+    back: str = "hist:home",
+) -> InlineKeyboardMarkup:
+    page_size = 8
+    start = page * page_size
+    chunk = users[start : start + page_size]
+    rows = []
+    for u in chunk:
+        mark = "★ " if getattr(u, "is_admin", False) else ""
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{mark}{u.short_code} · {u.display_name}",
+                    callback_data=f"hist:au:{u.id}",
+                )
+            ]
+        )
+    nav = []
+    pages = max(1, (len(users) + page_size - 1) // page_size) if users else 1
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="‹", callback_data=f"hist:ap:{page - 1}"))
+    if pages > 1:
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{pages}", callback_data="adm:noop"))
+    if page + 1 < pages:
+        nav.append(InlineKeyboardButton(text="›", callback_data=f"hist:ap:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    if not chunk:
+        rows.append([InlineKeyboardButton(text="Пока никого", callback_data="adm:noop")])
+    back_label = "« В админку" if back == "adm:home" else "« Моя история"
+    rows.append([InlineKeyboardButton(text=back_label, callback_data=back)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def history_sessions_kb(sessions: list, *, back: str = "hist:home") -> InlineKeyboardMarkup:
     rows = []
     for ws in sessions:
         title = ws.template.name if ws.template else "Тренировка"
@@ -369,11 +412,11 @@ def history_sessions_kb(sessions: list) -> InlineKeyboardMarkup:
         )
     if not rows:
         rows.append([InlineKeyboardButton(text="Пока пусто", callback_data="adm:noop")])
-    rows.append([InlineKeyboardButton(text="« Назад", callback_data="hist:home")])
+    rows.append([InlineKeyboardButton(text="« Назад", callback_data=back)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def history_exercises_kb(names: list[str], page: int = 0) -> InlineKeyboardMarkup:
+def history_exercises_kb(names: list[str], page: int = 0, *, back: str = "hist:home") -> InlineKeyboardMarkup:
     page_size = 8
     start = page * page_size
     chunk = names[start : start + page_size]
@@ -393,7 +436,7 @@ def history_exercises_kb(names: list[str], page: int = 0) -> InlineKeyboardMarku
         rows.append(nav)
     if not chunk:
         rows.append([InlineKeyboardButton(text="Пока пусто", callback_data="adm:noop")])
-    rows.append([InlineKeyboardButton(text="« Назад", callback_data="hist:home")])
+    rows.append([InlineKeyboardButton(text="« Назад", callback_data=back)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

@@ -47,6 +47,27 @@ async def list_recent_sessions(
     return list(result.scalars().all())
 
 
+async def list_athletes(session: AsyncSession) -> list:
+    from app.db.models import User
+
+    result = await session.execute(
+        select(User)
+        .where(User.onboarding_done.is_(True))
+        .order_by(User.short_code, User.display_name)
+    )
+    return list(result.scalars().all())
+
+
+async def get_athlete(session: AsyncSession, user_id: int):
+    from app.db.models import User
+
+    return await session.get(User, user_id)
+
+
+def athlete_label(user) -> str:
+    return f"{user.short_code} · {user.display_name}"
+
+
 async def get_user_session(
     session: AsyncSession,
     user_id: int,
