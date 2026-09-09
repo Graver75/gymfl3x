@@ -178,6 +178,8 @@ class SessionSet(Base):
     sets_count: Mapped[int] = mapped_column(Integer)
     difficulty: Mapped[Difficulty] = mapped_column(Enum(Difficulty))
     volume: Mapped[float] = mapped_column(Float)  # reps * weight * sets
+    set_number: Mapped[int] = mapped_column(Integer, default=0)
+    drop_index: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     session: Mapped[WorkoutSession] = relationship(back_populates="sets")

@@ -128,6 +128,20 @@ def sets_kb(target_sets: int, last_sets: int | None = None) -> InlineKeyboardMar
     )
 
 
+def after_set_kb(target_sets: int, done_sets: int) -> InlineKeyboardMarkup:
+    more = "Ещё подход"
+    if target_sets and done_sets < target_sets:
+        more = f"Ещё подход ({done_sets}/{target_sets})"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=more, callback_data="wo:more")],
+            [InlineKeyboardButton(text="Дропсет (другой вес в этом подходе)", callback_data="wo:drop")],
+            [InlineKeyboardButton(text="Готово по упражнению", callback_data="wo:exdone")],
+            [InlineKeyboardButton(text="Отменить последний кусок", callback_data="wo:undo")],
+        ]
+    )
+
+
 def difficulty_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[

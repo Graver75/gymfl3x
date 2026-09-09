@@ -8,7 +8,52 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.models import SessionStatus, WorkoutSession, WorkoutTemplate
-from app.services.progression import DIFFICULTY_LABELS, format_block
+from app.services.progression import DIFFICULTY_LABELS, format_session_exercise
+
+
+async def build_group_recap(session: AsyncSession, template: WorkoutTemplate, day: date) -> str:
+    """Build chat recap.
+
+    #деньспины
+    Упражнение
+    И 12×55, 10×50+8×40 легко
+    """
+    result = await session.execute(
+        select(WorkoutSession)
+        .where(
+            WorkoutSession.session_date == day,
+            WorkoutSession.template_id == template.id,
+            WorkoutSession.status == SessionStatus.finished,
+        )
+        .options(
+            selectinload(WorkoutSession.user),
+            selectinload(WorkoutSession.sets),
+        )
+    )
+    sessions = list(result.scalars().all())
+    if not sessions:
+        return f"#{template.hashtag}\nПока никто не залогировал тренировку."
+
+    by_exercise: dict[str, list[str]] = defaultdict(list)
+    order: list[str] = []
+
+    for ws in sorted(sessions, key=lambda s: s.user.short_code):
+        code = ws.user.short_code
+        grouped: dict[str, list] = defaultdict(list)
+        for sset in ws.sets:
+            grouped[sset.exercise_name].append(sset)
+        for name, rows in grouped.items():
+            if name not in by_exercise:
+                order.append(name)
+            diff = DIFFICULTY_LABELS[rows[-1].difficulty]
+            by_exercise[name].append(f"{code} {format_session_exercise(rows)} {diff}")
+
+    lines = [f"#{template.hashtag}"]
+    for name in order:
+        lines.append(name)
+        lines.extend(by_exercise[name])
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 async def build_group_recap(session: AsyncSession, template: WorkoutTemplate, day: date) -> str:
@@ -90,14 +135,21 @@ async def build_personal_retrospective(
     )
     previous = prev_result.scalar_one_or_none()
 
+    grouped_cur: dict[str, list] = defaultdict(list)
+    for s in current.sets:
+        grouped_cur[s.exercise_name].append(s)
+
     cur_volume = sum(s.volume for s in current.sets)
     lines = [
         f"Ретроспектива: {title}",
-        f"Упражнений: {len(current.sets)}",
+        f"Упражнений: {len(grouped_cur)}",
         f"Объём: {cur_volume:g} кг·повт",
     ]
 
     if previous:
+        grouped_prev: dict[str, list] = defaultdict(list)
+        for s in previous.sets:
+            grouped_prev[s.exercise_name].append(s)
         prev_volume = sum(s.volume for s in previous.sets)
         delta = cur_volume - prev_volume
         if prev_volume:
@@ -107,23 +159,19 @@ async def build_personal_retrospective(
         else:
             lines.append("Есть с чем сравнивать в следующий раз.")
 
-        prev_by_name = {s.exercise_name: s for s in previous.sets}
         progressed: list[str] = []
         stuck: list[str] = []
-        for sset in current.sets:
-            old = prev_by_name.get(sset.exercise_name)
-            if not old:
-                continue
-            if sset.weight > old.weight or (
-                sset.weight == old.weight and sset.reps > old.reps
-            ):
-                progressed.append(
-                    f"• {sset.exercise_name}: "
-                    f"{format_block(old.reps, old.weight, old.sets_count)} -> "
-                    f"{format_block(sset.reps, sset.weight, sset.sets_count)}"
-                )
-            if sset.difficulty.value in ("hard", "failure"):
-                stuck.append(f"• {sset.exercise_name} — тяжело/отказ")
+        for name, rows in grouped_cur.items():
+            old_rows = grouped_prev.get(name)
+            cur_w = max(s.weight for s in rows)
+            if old_rows:
+                old_w = max(s.weight for s in old_rows)
+                if cur_w > old_w or sum(s.volume for s in rows) > sum(s.volume for s in old_rows):
+                    progressed.append(
+                        f"• {name}: {format_session_exercise(old_rows)} -> {format_session_exercise(rows)}"
+                    )
+            if rows[-1].difficulty.value in ("hard", "failure"):
+                stuck.append(f"• {name} — тяжело/отказ")
         if progressed:
             lines.append("")
             lines.append("Прогресс:")
