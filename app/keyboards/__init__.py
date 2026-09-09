@@ -461,7 +461,7 @@ def history_sessions_kb(sessions: list, *, back: str = "hist:home") -> InlineKey
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"📅 {ws.session_date.isoformat()} · {title}",
+                    text=f"📅 {ui.format_user_date(ws.session_date)} · {title}",
                     callback_data=f"hist:s:{ws.id}",
                 )
             ]

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
+
 # Reply menu (exact texts for F.text filters)
 BTN_WORKOUT = "🏋️ Тренировка"
 BTN_TODAY = "📅 Сегодня"
@@ -71,6 +73,19 @@ ICO_ADMIN = "⚙️"
 ICO_WAVE = "👋"
 ICO_FIRE = "🔥"
 ICO_RECAP = "📝"
+
+
+def format_user_date(value: date | datetime | str) -> str:
+    """User-facing dates as dd.mm.yyyy."""
+    if isinstance(value, datetime):
+        value = value.date()
+    elif isinstance(value, str):
+        raw = value.strip()
+        if "T" in raw:
+            value = datetime.fromisoformat(raw).date()
+        else:
+            value = date.fromisoformat(raw)
+    return value.strftime("%d.%m.%Y")
 
 
 def label_target(text: str) -> str:

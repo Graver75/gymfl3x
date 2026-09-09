@@ -188,7 +188,7 @@ async def build_smart_presets(
     ]
     presets.last_parts = _parts_from_sets(last_sets)
     presets.last_pattern_text = format_session_exercise(last_sets)
-    presets.last_date = last.session_date.isoformat()
+    presets.last_date = ui.format_user_date(last.session_date)
     if last_sets:
         presets.last_difficulty = DIFFICULTY_LABELS.get(last_sets[-1].difficulty, None)
 
@@ -321,7 +321,7 @@ def _unique_ints(values: list[int | None]) -> list[int]:
 
 def format_session_history(ws: WorkoutSession) -> str:
     title = ws.template.name if ws.template else "Тренировка"
-    lines = [f"{ui.ICO_HISTORY} {title} · {ws.session_date.isoformat()}"]
+    lines = [f"{ui.ICO_HISTORY} {title} · {ui.format_user_date(ws.session_date)}"]
     grouped: dict[str, list] = defaultdict(list)
     for s in ws.sets:
         grouped[s.exercise_name].append(s)
@@ -360,7 +360,9 @@ async def format_exercise_history(
     for ws in history:
         rows = [s for s in ws.sets if name_key(s.exercise_name) == name_key(exercise_name)]
         diff = DIFFICULTY_LABELS.get(rows[-1].difficulty, "") if rows else ""
-        lines.append(f"{ws.session_date.isoformat()}: {format_session_exercise(rows)} {diff}".rstrip())
+        lines.append(
+            f"{ui.format_user_date(ws.session_date)}: {format_session_exercise(rows)} {diff}".rstrip()
+        )
     return "\n".join(lines)
 
 
@@ -443,7 +445,10 @@ async def compare_line_for_exercise(
     ]
     if not last_rows:
         return ""
-    text = f"Прошлый раз ({last.session_date.isoformat()}): {format_session_exercise(last_rows)}"
+    text = (
+        f"Прошлый раз ({ui.format_user_date(last.session_date)}): "
+        f"{format_session_exercise(last_rows)}"
+    )
     if len(history) >= 2:
         prev = history[1]
         prev_rows = [
@@ -498,7 +503,7 @@ async def format_athlete_week(session: AsyncSession, user_id: int, *, days: int 
     stuck: list[str] = []
     for ws in sessions:
         title = ws.template.name if ws.template else "Тренировка"
-        lines.append(f"{ws.session_date.isoformat()} · {title}")
+        lines.append(f"{ui.format_user_date(ws.session_date)} · {title}")
         grouped: dict[str, list] = defaultdict(list)
         for s in ws.sets:
             grouped[s.exercise_name].append(s)
@@ -507,7 +512,7 @@ async def format_athlete_week(session: AsyncSession, user_id: int, *, days: int 
             top = max(mains, key=lambda r: float(r.weight))
             lines.append(f"  {name}: {format_session_exercise(rows)} (раб. {top.weight:g})")
             if rows[-1].difficulty.value in ("hard", "failure"):
-                stuck.append(f"• {name} ({ws.session_date.isoformat()})")
+                stuck.append(f"• {name} ({ui.format_user_date(ws.session_date)})")
     if stuck:
         lines.append("")
         lines.append("Тяжело / отказ:")
