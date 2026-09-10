@@ -90,6 +90,7 @@ BTN_ADM_HOURS = "⏰ Часы напоминаний"
 BTN_ADM_ATHLETES_HIST = "📜 История атлетов"
 BTN_ADM_MISSING = "👀 Кто не залогировал"
 BTN_ADM_USERS = "👥 Пользователи"
+BTN_ADM_CHATS = "💬 Чаты бота"
 BTN_ADM_SNAPSHOT = "🧠 Снимок для NN"
 BTN_ADM_NN_LOAD = "📊 Нагрузка NN"
 

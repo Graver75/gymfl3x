@@ -346,11 +346,21 @@ def admin_menu_kb(*, full: bool = True) -> InlineKeyboardMarkup:
                 ],
                 [InlineKeyboardButton(text=ui.BTN_ADM_MISSING, callback_data="adm:missing")],
                 [InlineKeyboardButton(text=ui.BTN_ADM_USERS, callback_data="adm:users")],
+                [InlineKeyboardButton(text=ui.BTN_ADM_CHATS, callback_data="adm:chats")],
                 [InlineKeyboardButton(text=ui.BTN_ADM_SNAPSHOT, callback_data="adm:snapshot")],
                 [InlineKeyboardButton(text=ui.BTN_ADM_NN_LOAD, callback_data="adm:nnload")],
             ]
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_chats_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить статусы", callback_data="adm:chats")],
+            [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:home")],
+        ]
+    )
 
 
 def admin_nn_load_kb() -> InlineKeyboardMarkup:

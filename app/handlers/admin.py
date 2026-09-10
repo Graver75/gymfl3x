@@ -24,6 +24,7 @@ from app.db.models import (
 from app.db.session import SessionLocal
 from app.filters import PrivateChat
 from app.keyboards import (
+    admin_chats_kb,
     admin_menu_kb,
     admin_nn_load_kb,
     admin_users_kb,
@@ -46,6 +47,7 @@ from app.services.archive import (
     sync_catalog,
     upsert_archive,
 )
+from app.services.group_chats import format_chats_report, refresh_chats
 from app.services.reminders import WEEKDAY_NAMES
 from app.services.users import get_or_create_user
 from app.states import AdminSG
@@ -1099,6 +1101,26 @@ async def adm_missing_today(callback: CallbackQuery) -> None:
         )
         full = user.is_admin
     await callback.message.edit_text(text, reply_markup=admin_menu_kb(full=full))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "adm:chats")
+async def adm_chats(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    async with SessionLocal() as session:
+        probes = await refresh_chats(callback.bot, session)
+    text = format_chats_report(probes)
+    if len(text) > 4000:
+        text = text[:3990] + "…"
+    try:
+        await callback.message.edit_text(text, reply_markup=admin_chats_kb())
+    except Exception:
+        # Telegram: message is not modified
+        pass
     await callback.answer()
 
 
