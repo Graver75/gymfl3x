@@ -41,6 +41,7 @@ class AdminSG(StatesGroup):
     edit_exercise_name = State()
     edit_exercise_targets = State()
     set_hours = State()
+    compose_chat = State()
 
 
 class ProfileSG(StatesGroup):

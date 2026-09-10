@@ -354,11 +354,41 @@ def admin_menu_kb(*, full: bool = True) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def admin_chats_kb() -> InlineKeyboardMarkup:
+def admin_chats_kb(destinations: list | None = None, *, page: int = 0) -> InlineKeyboardMarkup:
+    """destinations: list of ChatProbe (or objects with chat_id/button_label/can_write)."""
+    items = list(destinations or [])
+    page_size = 8
+    start = page * page_size
+    chunk = items[start : start + page_size]
+    rows: list[list[InlineKeyboardButton]] = []
+    for d in chunk:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=d.button_label,
+                    callback_data=f"adm:chat:to:{d.chat_id}",
+                )
+            ]
+        )
+    pages = max(1, (len(items) + page_size - 1) // page_size) if items else 1
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="‹", callback_data=f"adm:chats:p:{page - 1}"))
+    if pages > 1:
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{pages}", callback_data="adm:noop"))
+    if page + 1 < pages:
+        nav.append(InlineKeyboardButton(text="›", callback_data=f"adm:chats:p:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text="🔄 Обновить статусы", callback_data="adm:chats")])
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_compose_cancel_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Обновить статусы", callback_data="adm:chats")],
-            [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:home")],
+            [InlineKeyboardButton(text=ui.BTN_CANCEL, callback_data="adm:chat:cancel")],
         ]
     )
 

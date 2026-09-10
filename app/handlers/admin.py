@@ -25,6 +25,7 @@ from app.db.session import SessionLocal
 from app.filters import PrivateChat
 from app.keyboards import (
     admin_chats_kb,
+    admin_compose_cancel_kb,
     admin_menu_kb,
     admin_nn_load_kb,
     admin_users_kb,
@@ -47,7 +48,7 @@ from app.services.archive import (
     sync_catalog,
     upsert_archive,
 )
-from app.services.group_chats import format_chats_report, refresh_chats
+from app.services.group_chats import format_chats_report, refresh_destinations
 from app.services.reminders import WEEKDAY_NAMES
 from app.services.users import get_or_create_user
 from app.states import AdminSG
@@ -1105,25 +1106,111 @@ async def adm_missing_today(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data == "adm:chats")
-async def adm_chats(callback: CallbackQuery) -> None:
+@router.callback_query(F.data.startswith("adm:chats:p:"))
+async def adm_chats(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.from_user is None or callback.message is None:
         return
     if not await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin"):
         await callback.answer("Нет доступа", show_alert=True)
         return
+    await state.clear()
+    page = 0
+    if callback.data and callback.data.startswith("adm:chats:p:"):
+        try:
+            page = int(callback.data.split(":")[-1])
+        except ValueError:
+            page = 0
     async with SessionLocal() as session:
-        probes = await refresh_chats(callback.bot, session)
+        probes = await refresh_destinations(callback.bot, session)
+    await state.update_data(adm_chat_dests=[{"chat_id": p.chat_id, "title": p.title, "kind": p.kind, "can_write": p.can_write} for p in probes])
     text = format_chats_report(probes)
-    if len(text) > 4000:
-        text = text[:3990] + "…"
+    if len(text) > 3500:
+        text = text[:3490] + "…"
     from aiogram.exceptions import TelegramBadRequest
 
     try:
-        await callback.message.edit_text(text, reply_markup=admin_chats_kb())
+        await callback.message.edit_text(
+            text, reply_markup=admin_chats_kb(probes, page=page)
+        )
     except TelegramBadRequest as exc:
         if "message is not modified" not in str(exc):
             raise
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:chat:to:"))
+async def adm_chat_compose_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    if not await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    raw = callback.data.removeprefix("adm:chat:to:")
+    try:
+        chat_id = int(raw)
+    except ValueError:
+        await callback.answer("Некорректный чат", show_alert=True)
+        return
+    data = await state.get_data()
+    dests = data.get("adm_chat_dests") or []
+    dest = next((d for d in dests if int(d["chat_id"]) == chat_id), None)
+    title = (dest or {}).get("title") or str(chat_id)
+    kind = (dest or {}).get("kind") or "?"
+    can_write = (dest or {}).get("can_write", True)
+    if dest is not None and not can_write:
+        await callback.answer(
+            "Сейчас писать нельзя (бот не в чате / заблокирован).",
+            show_alert=True,
+        )
+        return
+    await state.set_state(AdminSG.compose_chat)
+    await state.update_data(compose_chat_id=chat_id, compose_chat_title=title)
+    kind_label = "группу" if kind == "group" else "личку"
+    await callback.message.answer(
+        f"Сообщение в {kind_label} <b>{ui.esc(title)}</b>\n"
+        f"id <code>{chat_id}</code>\n\n"
+        "Пришли текст одним сообщением (HTML можно).",
+        reply_markup=admin_compose_cancel_kb(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "adm:chat:cancel")
+async def adm_chat_compose_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None:
+        return
+    await state.clear()
+    await callback.message.edit_text("Отменено. Вернись в «Чаты бота» из админки.")
+    await callback.answer("Отменено")
+
+
+@router.message(AdminSG.compose_chat)
+async def adm_chat_compose_send(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if not await _full_admin(message.from_user.id, message.from_user.full_name or "Admin"):
+        return
+    data = await state.get_data()
+    chat_id = data.get("compose_chat_id")
+    title = data.get("compose_chat_title") or str(chat_id)
+    text = (message.text or message.caption or "").strip()
+    if chat_id is None:
+        await state.clear()
+        await message.answer("Цель потеряна — открой «Чаты бота» снова.")
+        return
+    if not text:
+        await message.answer("Нужен текст. Или нажми «Отмена».")
+        return
+    try:
+        await message.bot.send_message(int(chat_id), text)
+    except Exception as exc:
+        await message.answer(
+            f"Не отправилось в <b>{ui.esc(title)}</b>: <code>{ui.esc(type(exc).__name__)}</code>\n"
+            f"{ui.esc(str(exc)[:300])}"
+        )
+        return
+    await state.clear()
+    await message.answer(f"Отправлено в <b>{ui.esc(title)}</b> (<code>{chat_id}</code>).")
 
 
 @router.callback_query(F.data == "adm:users")
