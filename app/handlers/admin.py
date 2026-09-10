@@ -54,7 +54,6 @@ from app.services.archive import (
 from app.services.group_chats import format_chats_report, refresh_destinations
 from app.services.reminders import WEEKDAY_NAMES
 from app.services.strength_levels import (
-    LEVEL_LABELS,
     list_standards,
     reset_standard_to_seed,
     set_thresholds,
@@ -1120,7 +1119,7 @@ def _format_level_card(std: ExerciseStrengthStandard) -> str:
     unit = "повт." if std.mode == "reps" else "×BW"
     male = thresholds_for(std, "male")
     female = thresholds_for(std, "female")
-    labels = " → ".join(LEVEL_LABELS)
+    labels = "1→2→…→10"
     review = " ⚠ needs review" if std.needs_review else ""
     return (
         f"{ui.b(ui.BTN_ADM_LEVELS)}{review}\n"
@@ -1129,7 +1128,7 @@ def _format_level_card(std: ExerciseStrengthStandard) -> str:
         f"Уровни: {labels}\n\n"
         f"<b>М:</b> {' · '.join(f'{v:g}' for v in male)}\n"
         f"<b>Ж:</b> {' · '.join(f'{v:g}' for v in female)}\n\n"
-        "Правка: 5 чисел через пробел, строго по возрастанию."
+        "Правка: 10 чисел через пробел, строго по возрастанию."
     )
 
 
@@ -1274,8 +1273,8 @@ async def adm_level_edit_start(callback: CallbackQuery, state: FSMContext) -> No
     await callback.message.answer(
         f"Пороги <b>{ui.esc(std.name)}</b> ({sex_l}), mode={std.mode}, единицы: {unit}\n"
         f"Сейчас: <code>{ui.esc(cur)}</code>\n\n"
-        "Пришли 5 чисел через пробел, например:\n"
-        "<code>0.45 0.7 1.0 1.35 1.7</code>"
+        "Пришли 10 чисел через пробел (ур.1→10), например:\n"
+        "<code>0.28 0.5 0.62 0.75 0.88 1.0 1.25 1.5 1.62 2.06</code>"
     )
     await callback.answer()
 
@@ -1292,10 +1291,10 @@ async def adm_level_edit_save(message: Message, state: FSMContext) -> None:
     parts = (message.text or "").replace(",", ".").split()
     try:
         values = [float(x) for x in parts]
-        if len(values) != 5:
-            raise ValueError("need_5")
+        if len(values) != 10:
+            raise ValueError("need_10")
     except ValueError:
-        await message.answer("Нужно ровно 5 чисел через пробел.")
+        await message.answer("Нужно ровно 10 чисел через пробел.")
         return
     async with SessionLocal() as session:
         std = await session.get(ExerciseStrengthStandard, int(std_id))
@@ -1309,7 +1308,7 @@ async def adm_level_edit_save(message: Message, state: FSMContext) -> None:
             if str(exc) == "not_increasing":
                 await message.answer("Числа должны строго возрастать.")
                 return
-            await message.answer("Нужно ровно 5 чисел.")
+            await message.answer("Нужно ровно 10 чисел.")
             return
         await session.commit()
         await session.refresh(std)

@@ -25,19 +25,17 @@ from app.db.models import (
 )
 from app.services.archive import name_key
 
-LEVEL_LABELS = (
-    "Новичок",
-    "Новичок+",
-    "Средний",
-    "Продвинутый",
-    "Элита",
-)
+NUM_LEVELS = 10
+LEVEL_LABELS = tuple(f"Уровень {i}" for i in range(1, NUM_LEVELS + 1))
+BELOW_LABEL = "ниже уровня 1"
+_MALE_ATTRS = tuple(f"male_t{i}" for i in range(1, NUM_LEVELS + 1))
+_FEMALE_ATTRS = tuple(f"female_t{i}" for i in range(1, NUM_LEVELS + 1))
 
 
 @dataclass
 class LevelResult:
     exercise_name: str
-    level_index: int | None  # 0..4 or None if below beginner
+    level_index: int | None  # 0..9 or None if below level 1
     level_label: str
     mode: str
     value: float  # ratio or reps
@@ -90,21 +88,19 @@ def resolve_key(raw_name: str) -> str:
 
 
 def thresholds_for(std: ExerciseStrengthStandard, sex: str) -> list[float]:
-    if sex == "female":
-        return [std.female_t1, std.female_t2, std.female_t3, std.female_t4, std.female_t5]
-    return [std.male_t1, std.male_t2, std.male_t3, std.male_t4, std.male_t5]
+    attrs = _FEMALE_ATTRS if sex == "female" else _MALE_ATTRS
+    return [float(getattr(std, a) or 0) for a in attrs]
 
 
 def set_thresholds(std: ExerciseStrengthStandard, sex: str, values: Sequence[float]) -> None:
     v = [float(x) for x in values]
-    if len(v) != 5:
-        raise ValueError("need_5")
-    if any(v[i] >= v[i + 1] for i in range(4)):
+    if len(v) != NUM_LEVELS:
+        raise ValueError("need_10")
+    if any(v[i] >= v[i + 1] for i in range(NUM_LEVELS - 1)):
         raise ValueError("not_increasing")
-    if sex == "female":
-        std.female_t1, std.female_t2, std.female_t3, std.female_t4, std.female_t5 = v
-    else:
-        std.male_t1, std.male_t2, std.male_t3, std.male_t4, std.male_t5 = v
+    attrs = _FEMALE_ATTRS if sex == "female" else _MALE_ATTRS
+    for attr, val in zip(attrs, v, strict=True):
+        setattr(std, attr, val)
     std.needs_review = False
 
 
@@ -118,25 +114,35 @@ def level_index_for(value: float, thresholds: Sequence[float]) -> int | None:
     return idx
 
 
+def _apply_pair(std: ExerciseStrengthStandard, male: Sequence[float], female: Sequence[float]) -> None:
+    for attr, val in zip(_MALE_ATTRS, male, strict=True):
+        setattr(std, attr, float(val))
+    for attr, val in zip(_FEMALE_ATTRS, female, strict=True):
+        setattr(std, attr, float(val))
+
+
 def _row_from_seed(key: str, payload: dict[str, Any]) -> ExerciseStrengthStandard:
     male = tuple(payload["male"])
     female = tuple(payload["female"])
-    return ExerciseStrengthStandard(
+    row = ExerciseStrengthStandard(
         name=str(payload.get("name") or key)[:128],
         name_key=key,
         mode=str(payload.get("mode") or "ratio"),
-        male_t1=float(male[0]),
-        male_t2=float(male[1]),
-        male_t3=float(male[2]),
-        male_t4=float(male[3]),
-        male_t5=float(male[4]),
-        female_t1=float(female[0]),
-        female_t2=float(female[1]),
-        female_t3=float(female[2]),
-        female_t4=float(female[3]),
-        female_t5=float(female[4]),
         needs_review=bool(payload.get("needs_review", False)),
     )
+    _apply_pair(row, male, female)
+    return row
+
+
+def _default_isolation_row(name: str, key: str) -> ExerciseStrengthStandard:
+    row = ExerciseStrengthStandard(
+        name=name.strip()[:128],
+        name_key=key,
+        mode="ratio",
+        needs_review=True,
+    )
+    _apply_pair(row, DEFAULT_ISOLATION_MALE, DEFAULT_ISOLATION_FEMALE)
+    return row
 
 
 async def ensure_standards(session: AsyncSession) -> int:
@@ -155,6 +161,63 @@ async def ensure_standards(session: AsyncSession) -> int:
     if added:
         await session.commit()
     return added
+
+
+async def upgrade_standards_to_v10(session: AsyncSession) -> int:
+    """Fill t6..t10 / reseed from SL-based 10-level seeds when migrating from 5 levels."""
+    rows = list((await session.execute(select(ExerciseStrengthStandard))).scalars().all())
+    if not rows:
+        return 0
+    needs = any(getattr(r, "male_t10", None) is None for r in rows)
+    if not needs:
+        # Also upgrade if still looking like old 5-level seed (t6 equals default NULL filled as 0)
+        # After ALTER, SQLite leaves new cols NULL → needs=True. If already filled, skip.
+        return 0
+
+    updated = 0
+    for std in rows:
+        payload = SEED.get(std.name_key)
+        if payload:
+            fresh = _row_from_seed(std.name_key, payload)
+            std.name = fresh.name
+            std.mode = fresh.mode
+            _apply_pair(std, [getattr(fresh, a) for a in _MALE_ATTRS], [getattr(fresh, a) for a in _FEMALE_ATTRS])
+            std.needs_review = fresh.needs_review
+        else:
+            # Expand old t1..t5 into 10 steps, or fall back to isolation defaults
+            old_m = [float(getattr(std, f"male_t{i}") or 0) for i in range(1, 6)]
+            old_f = [float(getattr(std, f"female_t{i}") or 0) for i in range(1, 6)]
+            if all(x > 0 for x in old_m) and all(x > 0 for x in old_f):
+                male = _expand_five_to_ten(old_m)
+                female = _expand_five_to_ten(old_f)
+                _apply_pair(std, male, female)
+            else:
+                _apply_pair(std, DEFAULT_ISOLATION_MALE, DEFAULT_ISOLATION_FEMALE)
+                std.needs_review = True
+        updated += 1
+    if updated:
+        await session.commit()
+    return updated
+
+
+def _expand_five_to_ten(five: Sequence[float]) -> list[float]:
+    beg, nov, mid, adv, elite = (float(x) for x in five)
+    vals = [
+        round(beg * 0.55, 3),
+        round(beg, 3),
+        round((beg + nov) / 2, 3),
+        round(nov, 3),
+        round((nov + mid) / 2, 3),
+        round(mid, 3),
+        round((mid + adv) / 2, 3),
+        round(adv, 3),
+        round((adv + elite) / 2, 3),
+        round(elite * 1.18, 3),
+    ]
+    out = [vals[0]]
+    for v in vals[1:]:
+        out.append(max(v, out[-1] + 0.01))
+    return [round(x, 3) for x in out]
 
 
 async def sync_standards_from_catalog(session: AsyncSession) -> int:
@@ -180,22 +243,7 @@ async def sync_standards_from_catalog(session: AsyncSession) -> int:
         if key in SEED:
             row = _row_from_seed(key, SEED[key])
         else:
-            row = ExerciseStrengthStandard(
-                name=raw.strip()[:128],
-                name_key=key,
-                mode="ratio",
-                male_t1=DEFAULT_ISOLATION_MALE[0],
-                male_t2=DEFAULT_ISOLATION_MALE[1],
-                male_t3=DEFAULT_ISOLATION_MALE[2],
-                male_t4=DEFAULT_ISOLATION_MALE[3],
-                male_t5=DEFAULT_ISOLATION_MALE[4],
-                female_t1=DEFAULT_ISOLATION_FEMALE[0],
-                female_t2=DEFAULT_ISOLATION_FEMALE[1],
-                female_t3=DEFAULT_ISOLATION_FEMALE[2],
-                female_t4=DEFAULT_ISOLATION_FEMALE[3],
-                female_t5=DEFAULT_ISOLATION_FEMALE[4],
-                needs_review=True,
-            )
+            row = _default_isolation_row(raw, key)
         session.add(row)
         existing[key] = row
         added += 1
@@ -214,19 +262,10 @@ async def reset_standard_to_seed(session: AsyncSession, std_id: int) -> Exercise
     fresh = _row_from_seed(std.name_key, payload)
     std.name = fresh.name
     std.mode = fresh.mode
-    std.male_t1, std.male_t2, std.male_t3, std.male_t4, std.male_t5 = (
-        fresh.male_t1,
-        fresh.male_t2,
-        fresh.male_t3,
-        fresh.male_t4,
-        fresh.male_t5,
-    )
-    std.female_t1, std.female_t2, std.female_t3, std.female_t4, std.female_t5 = (
-        fresh.female_t1,
-        fresh.female_t2,
-        fresh.female_t3,
-        fresh.female_t4,
-        fresh.female_t5,
+    _apply_pair(
+        std,
+        [getattr(fresh, a) for a in _MALE_ATTRS],
+        [getattr(fresh, a) for a in _FEMALE_ATTRS],
     )
     std.needs_review = fresh.needs_review
     await session.commit()
@@ -275,12 +314,12 @@ def evaluate_level(
             value = e1rm  # fallback if logged oddly
         thresholds = thresholds_for(std, sex_key)
         idx = level_index_for(value, thresholds)
-        label = LEVEL_LABELS[idx] if idx is not None else "ниже новичка"
+        label = LEVEL_LABELS[idx] if idx is not None else BELOW_LABEL
         next_label = None
         next_th = None
         if idx is None:
             next_label, next_th = LEVEL_LABELS[0], thresholds[0]
-        elif idx < 4:
+        elif idx < NUM_LEVELS - 1:
             next_label, next_th = LEVEL_LABELS[idx + 1], thresholds[idx + 1]
         return LevelResult(
             exercise_name=exercise_name,
@@ -319,14 +358,14 @@ def evaluate_level(
     ratio = e1rm / float(body_weight) if e1rm > 0 else 0.0
     thresholds = thresholds_for(std, sex_key)
     idx = level_index_for(ratio, thresholds)
-    label = LEVEL_LABELS[idx] if idx is not None else "ниже новичка"
+    label = LEVEL_LABELS[idx] if idx is not None else BELOW_LABEL
     next_label = None
     next_th = None
     next_e1rm = None
     next_work = None
     if idx is None:
         next_label, next_th = LEVEL_LABELS[0], thresholds[0]
-    elif idx < 4:
+    elif idx < NUM_LEVELS - 1:
         next_label, next_th = LEVEL_LABELS[idx + 1], thresholds[idx + 1]
     if next_th is not None:
         next_e1rm = float(next_th) * float(body_weight)
@@ -374,8 +413,8 @@ def format_level_feedback(result: LevelResult) -> str:
                 f"Следующий (<b>{result.next_label}</b>): e1RM ~{e1} кг "
                 f"≈ ~{ww} кг на {result.target_reps} повт."
             )
-    elif result.level_index == 4:
-        lines.append("Ты на максимальном уровне шкалы — элита.")
+    elif result.level_index == NUM_LEVELS - 1:
+        lines.append("Ты на максимальном уровне шкалы — уровень 10.")
     if result.needs_review:
         lines.append("<i>Шкала помечена «нужен review» в админке.</i>")
     return "\n".join(lines)
@@ -438,7 +477,7 @@ async def profile_progress_lines(session: AsyncSession, user: User) -> str:
         )
 
     counts = {label: 0 for label in LEVEL_LABELS}
-    counts["ниже новичка"] = 0
+    counts[BELOW_LABEL] = 0
     counts["нет шкалы"] = 0
     lines: list[str] = []
     sex = user.sex or "male"
@@ -460,7 +499,7 @@ async def profile_progress_lines(session: AsyncSession, user: User) -> str:
         if res.missing_bw:
             lines.append(f"• {name}: укажи вес тела")
             continue
-        key = res.level_label if res.level_label in counts else "ниже новичка"
+        key = res.level_label if res.level_label in counts else BELOW_LABEL
         counts[key] = counts.get(key, 0) + 1
         if res.mode == "reps":
             detail = f"{res.value:g} повт."
@@ -475,9 +514,11 @@ async def profile_progress_lines(session: AsyncSession, user: User) -> str:
                 nxt = f" → {res.next_label} ≈{ww} кг×10"
         lines.append(f"• <b>{name}</b>: {res.level_label} ({detail}){nxt}")
 
-    summary = " · ".join(
-        f"{lab} {counts.get(lab, 0)}" for lab in (*LEVEL_LABELS, "ниже новичка")
-    )
+    # Compact summary: only non-zero buckets
+    summary_parts = [
+        f"{lab} {counts[lab]}" for lab in (*LEVEL_LABELS, BELOW_LABEL) if counts.get(lab, 0)
+    ]
+    summary = " · ".join(summary_parts) if summary_parts else "нет данных"
     header = [
         "<b>Прогресс по упражнениям</b>",
         f"Пол для шкалы: <b>{'Ж' if sex == 'female' else 'М'}</b>",

@@ -16,7 +16,11 @@ from app.handlers import setup_routers
 from app.logging_setup import setup_logging
 from app.services.reminders import send_evening_recaps, send_morning_reminders
 from app.services.archive import backfill_archive
-from app.services.strength_levels import ensure_standards, sync_standards_from_catalog
+from app.services.strength_levels import (
+    ensure_standards,
+    sync_standards_from_catalog,
+    upgrade_standards_to_v10,
+)
 
 logger = logging.getLogger("gymflex")
 
@@ -32,6 +36,9 @@ async def main() -> None:
         seeded = await ensure_standards(session)
         if seeded:
             logger.info("Strength standards seed: +%s", seeded)
+        upgraded = await upgrade_standards_to_v10(session)
+        if upgraded:
+            logger.info("Strength standards upgraded to 10 levels: %s rows", upgraded)
         synced = await sync_standards_from_catalog(session)
         if synced:
             logger.info("Strength standards catalog sync: +%s", synced)

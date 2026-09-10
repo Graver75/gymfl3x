@@ -256,7 +256,7 @@ class ExerciseArchive(Base):
 
 
 class ExerciseStrengthStandard(Base):
-    """Bodyweight (or reps) thresholds for 5 strength levels per exercise."""
+    """Bodyweight (or reps) thresholds for 10 strength levels per exercise."""
 
     __tablename__ = "exercise_strength_standard"
 
@@ -264,16 +264,26 @@ class ExerciseStrengthStandard(Base):
     name: Mapped[str] = mapped_column(String(128))
     name_key: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     mode: Mapped[str] = mapped_column(String(16), default="ratio")  # ratio | reps
-    male_t1: Mapped[float] = mapped_column(Float, default=0.3)
-    male_t2: Mapped[float] = mapped_column(Float, default=0.5)
-    male_t3: Mapped[float] = mapped_column(Float, default=0.75)
-    male_t4: Mapped[float] = mapped_column(Float, default=1.0)
-    male_t5: Mapped[float] = mapped_column(Float, default=1.25)
-    female_t1: Mapped[float] = mapped_column(Float, default=0.2)
-    female_t2: Mapped[float] = mapped_column(Float, default=0.35)
-    female_t3: Mapped[float] = mapped_column(Float, default=0.5)
-    female_t4: Mapped[float] = mapped_column(Float, default=0.7)
-    female_t5: Mapped[float] = mapped_column(Float, default=0.9)
+    male_t1: Mapped[float] = mapped_column(Float, default=0.15)
+    male_t2: Mapped[float] = mapped_column(Float, default=0.25)
+    male_t3: Mapped[float] = mapped_column(Float, default=0.35)
+    male_t4: Mapped[float] = mapped_column(Float, default=0.45)
+    male_t5: Mapped[float] = mapped_column(Float, default=0.55)
+    male_t6: Mapped[float] = mapped_column(Float, default=0.7)
+    male_t7: Mapped[float] = mapped_column(Float, default=0.85)
+    male_t8: Mapped[float] = mapped_column(Float, default=1.0)
+    male_t9: Mapped[float] = mapped_column(Float, default=1.2)
+    male_t10: Mapped[float] = mapped_column(Float, default=1.4)
+    female_t1: Mapped[float] = mapped_column(Float, default=0.1)
+    female_t2: Mapped[float] = mapped_column(Float, default=0.18)
+    female_t3: Mapped[float] = mapped_column(Float, default=0.25)
+    female_t4: Mapped[float] = mapped_column(Float, default=0.35)
+    female_t5: Mapped[float] = mapped_column(Float, default=0.45)
+    female_t6: Mapped[float] = mapped_column(Float, default=0.55)
+    female_t7: Mapped[float] = mapped_column(Float, default=0.7)
+    female_t8: Mapped[float] = mapped_column(Float, default=0.85)
+    female_t9: Mapped[float] = mapped_column(Float, default=1.0)
+    female_t10: Mapped[float] = mapped_column(Float, default=1.2)
     needs_review: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

@@ -57,6 +57,27 @@ async def _add_missing_columns(conn) -> None:
     if "rpe_1_10" not in cols:
         await conn.execute(text("ALTER TABLE session_sets ADD COLUMN rpe_1_10 INTEGER"))
 
+    # Strength standards: ensure t6..t10 exist (migration 5 → 10 levels)
+    result = await conn.execute(text("PRAGMA table_info(exercise_strength_standard)"))
+    std_cols = {row[1] for row in result}
+    if std_cols:
+        for col in (
+            "male_t6",
+            "male_t7",
+            "male_t8",
+            "male_t9",
+            "male_t10",
+            "female_t6",
+            "female_t7",
+            "female_t8",
+            "female_t9",
+            "female_t10",
+        ):
+            if col not in std_cols:
+                await conn.execute(
+                    text(f"ALTER TABLE exercise_strength_standard ADD COLUMN {col} FLOAT")
+                )
+
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with SessionLocal() as session:
