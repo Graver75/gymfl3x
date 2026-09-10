@@ -324,9 +324,21 @@ def after_set_kb(target_sets: int, done_sets: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=more, callback_data="wo:more")],
+            [InlineKeyboardButton(text=ui.BTN_DROP_SET, callback_data="wo:drop")],
             [InlineKeyboardButton(text=ui.BTN_EX_DONE, callback_data="wo:exdone")],
             [InlineKeyboardButton(text=ui.BTN_UNDO_SET, callback_data="wo:undo")],
             [InlineKeyboardButton(text=ui.BTN_COACH_SET, callback_data="wo:coach")],
+        ]
+    )
+
+
+def onboarding_sex_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Мужской", callback_data="onb:sex:male"),
+                InlineKeyboardButton(text="Женский", callback_data="onb:sex:female"),
+            ]
         ]
     )
 

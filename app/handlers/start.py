@@ -8,7 +8,7 @@ from aiogram.types import CallbackQuery, Message
 from app import ui_copy as ui
 from app.db.session import SessionLocal
 from app.filters import PrivateChat
-from app.keyboards import main_menu, skip_kb
+from app.keyboards import main_menu, onboarding_sex_kb, skip_kb
 from app.services.progression import PHASE_LABELS
 from app.services.users import apply_onboarding, can_open_admin, get_or_create_user
 from app.states import OnboardingSG
@@ -90,14 +90,19 @@ async def onb_weight(message: Message, state: FSMContext) -> None:
     await message.answer("Рост в см (опционально):", reply_markup=skip_kb())
 
 
+async def _ask_sex(message: Message, state: FSMContext) -> None:
+    await state.set_state(OnboardingSG.sex)
+    await message.answer(
+        "Пол (для шкалы силы М/Ж):",
+        reply_markup=onboarding_sex_kb(),
+    )
+
+
 @router.callback_query(OnboardingSG.height, F.data == "onb:skip_height")
 async def onb_skip_height(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(height_cm=None)
-    await state.set_state(OnboardingSG.experience)
     if callback.message:
-        await callback.message.answer(
-            "Сколько месяцев уже занимаешься? Числом, например 3 или 24."
-        )
+        await _ask_sex(callback.message, state)
     await callback.answer()
 
 
@@ -115,8 +120,24 @@ async def onb_height(message: Message, state: FSMContext) -> None:
             await message.answer("Рост в см или «пропустить».")
             return
     await state.update_data(height_cm=height)
+    await _ask_sex(message, state)
+
+
+@router.callback_query(OnboardingSG.sex, F.data.startswith("onb:sex:"))
+async def onb_sex(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.data is None:
+        return
+    sex = callback.data.split(":")[-1]
+    if sex not in {"male", "female"}:
+        await callback.answer("Выбери М или Ж", show_alert=True)
+        return
+    await state.update_data(sex=sex)
     await state.set_state(OnboardingSG.experience)
-    await message.answer("Сколько месяцев уже занимаешься? Числом, например 3 или 24.")
+    if callback.message:
+        await callback.message.answer(
+            "Сколько месяцев уже занимаешься? Числом, например 3 или 24."
+        )
+    await callback.answer("Ок")
 
 
 @router.message(OnboardingSG.experience)
@@ -132,6 +153,10 @@ async def onb_experience(message: Message, state: FSMContext) -> None:
         return
 
     data = await state.get_data()
+    if data.get("sex") not in {"male", "female"}:
+        await _ask_sex(message, state)
+        return
+
     async with SessionLocal() as session:
         user = await get_or_create_user(
             session,
@@ -146,16 +171,19 @@ async def onb_experience(message: Message, state: FSMContext) -> None:
             body_weight=data["body_weight"],
             height_cm=data.get("height_cm"),
             experience_months=months,
+            sex=data.get("sex"),
         )
 
     await state.clear()
+    sex_label = "Ж" if user.sex == "female" else "М"
     await message.answer(
         f"{ui.ICO_DONE} Готово!\n"
+        f"Пол для уровней: {ui.b(sex_label)}\n"
         f"Фаза прогрессии: {PHASE_LABELS[user.phase]}\n\n"
         "• медовый месяц (<6 мес) — быстрее поднимаем вес\n"
         "• средний (6–18) — умеренно\n"
         "• плато (>18) — сначала повторы, потом вес\n\n"
-        f"Фазу можно сменить в {ui.BTN_PROFILE}.\n"
+        f"Фазу и пол можно сменить в {ui.BTN_PROFILE}.\n"
         "Админ задаёт общую программу — она read-only для остальных.\n\n"
         "Команды: /today /program /profile /admin",
         reply_markup=main_menu(show_admin=can_open_admin(user)),

@@ -110,11 +110,14 @@ async def apply_onboarding(
     body_weight: float,
     height_cm: float | None,
     experience_months: int,
+    sex: str | None = None,
 ) -> User:
     user.display_name = display_name[:64]
     user.short_code = short_code[:8].upper()
     user.body_weight = body_weight
     user.height_cm = height_cm
+    if sex in {"male", "female"}:
+        user.sex = sex
     set_experience_months(user, experience_months)
     user.phase = phase_from_experience(experience_months)
     user.onboarding_done = True

@@ -32,6 +32,7 @@ BTN_ENTER_WEIGHT = "⌨️ Ввести вес"
 BTN_ENTER_REPS = "⌨️ Ввести число"
 BTN_FINISH_WORKOUT = "🏁 Закончить тренировку"
 BTN_MORE_SET = "➕ Ещё подход"
+BTN_DROP_SET = "↘️ Дроп-сет"
 BTN_EX_DONE = "✅ Готово по упражнению"
 BTN_UNDO_SET = "↩️ Отменить последний подход"
 BTN_RESET_WORKOUT = "🔄 Сбросить тренировку"
@@ -158,7 +159,9 @@ def label_rest(line: str) -> str:
     return line.replace("Отдых:", f"{ICO_REST} Отдых:", 1)
 
 
-def label_set(n: int) -> str:
+def label_set(n: int, drop_index: int = 0) -> str:
+    if drop_index > 0:
+        return f"{ICO_SET} Подход {n} · дроп {drop_index}"
     return f"{ICO_SET} Подход {n}"
 
 

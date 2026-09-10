@@ -173,7 +173,8 @@ def _unique_set_count(parts: list[dict]) -> int:
 
 def _set_prompt(data: dict) -> str:
     set_no = int(data.get("current_set") or 1)
-    return ui.label_set(set_no)
+    drop = int(data.get("drop_index") or 0)
+    return ui.label_set(set_no, drop)
 
 
 def _weight_kb_from_data(exercise, ex_state, data: dict, draft: float | None = None):
@@ -1113,6 +1114,82 @@ async def next_set(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.message.edit_text(
         f"{ui.label_exercise(name)}\n{format_logged_parts(logged)}\n\n{_set_prompt(data)}"
         f"{rest_line(data)}\nВыбери вес:",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@router.callback_query(WorkoutSG.after_set, F.data == "wo:drop")
+async def drop_set(callback: CallbackQuery, state: FSMContext) -> None:
+    """Start a drop segment on the same set_number with a lower weight."""
+    if callback.message is None or callback.from_user is None:
+        return
+    data = await state.get_data()
+    logged = data.get("logged") or []
+    if not logged:
+        await callback.answer("Сначала запиши подход", show_alert=True)
+        return
+
+    last = logged[-1]
+    set_no = int(last["set_number"])
+    same = [p for p in logged if int(p["set_number"]) == set_no]
+    next_drop = max(int(p["drop_index"]) for p in same) + 1
+    last_w = float(last["weight"])
+    step = 2.5
+    async with SessionLocal() as session:
+        exercise = await resolve_exercise(session, data)
+        if exercise and getattr(exercise, "weight_step", None):
+            step = float(exercise.weight_step) or 2.5
+        user = await get_or_create_user(
+            session, callback.from_user.id, callback.from_user.full_name or "Athlete"
+        )
+        ex_state = None
+        if data.get("exercise_id"):
+            ex_state = await _get_state(session, user.id, data["exercise_id"])
+        suggested = ex_state.suggested_weight if ex_state else None
+        working = ex_state.working_weight if ex_state else None
+        user_id = user.id
+        name = exercise.name if exercise else "Упражнение"
+        exercise_name = name
+
+    # Prefer lighter weight for the drop
+    fallback = max(0.0, last_w - step)
+    fallback_reps = int(last["reps"]) if last.get("reps") else data.get("draft_reps")
+
+    await state.update_data(
+        current_set=set_no,
+        drop_index=next_drop,
+        last_action_at=touch_action_iso(),
+    )
+    await _load_presets_into_state(
+        state,
+        user_id=user_id,
+        exercise_id=data.get("exercise_id"),
+        exercise_name=exercise_name,
+        suggested=suggested,
+        working=working,
+        set_number=set_no,
+        drop_index=next_drop,
+        fallback_weight=fallback,
+        fallback_reps=fallback_reps,
+        prefer_session=True,
+    )
+    await state.set_state(WorkoutSG.weight)
+    data = await state.get_data()
+
+    async with SessionLocal() as session:
+        exercise = await resolve_exercise(session, data)
+        user = await get_or_create_user(
+            session, callback.from_user.id, callback.from_user.full_name or "Athlete"
+        )
+        ex_state = None
+        if data.get("exercise_id"):
+            ex_state = await _get_state(session, user.id, data["exercise_id"])
+        kb = _weight_kb_from_data(exercise, ex_state, data)
+
+    await callback.message.edit_text(
+        f"{ui.label_exercise(name)}\n{format_logged_parts(logged)}\n\n{_set_prompt(data)}"
+        f"{rest_line(data)}\nДроп — выбери вес:",
         reply_markup=kb,
     )
     await callback.answer()

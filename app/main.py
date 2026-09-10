@@ -12,10 +12,11 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.config import get_settings
 from app.db.session import SessionLocal, init_db
+from app.fsm_storage import SQLiteStorage, sqlite_path_from_database_url
 from app.handlers import setup_routers
 from app.logging_setup import setup_logging
-from app.services.reminders import send_evening_recaps, send_morning_reminders
 from app.services.archive import backfill_archive
+from app.services.reminders import send_evening_recaps, send_morning_reminders
 from app.services.strength_levels import (
     ensure_standards,
     sync_standards_from_catalog,
@@ -23,6 +24,15 @@ from app.services.strength_levels import (
 )
 
 logger = logging.getLogger("gymflex")
+
+
+def _build_fsm_storage(settings) -> MemoryStorage | SQLiteStorage:
+    try:
+        path = sqlite_path_from_database_url(settings.database_url)
+        return SQLiteStorage(path)
+    except Exception:
+        logger.exception("FSM SQLite storage failed; falling back to MemoryStorage")
+        return MemoryStorage()
 
 
 async def main() -> None:
@@ -47,7 +57,8 @@ async def main() -> None:
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    dp = Dispatcher(storage=MemoryStorage())
+    storage = _build_fsm_storage(settings)
+    dp = Dispatcher(storage=storage)
     dp.include_router(setup_routers())
 
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
@@ -78,6 +89,7 @@ async def main() -> None:
     finally:
         logger.info("Shutting down")
         scheduler.shutdown(wait=False)
+        await storage.close()
         await bot.session.close()
 
 

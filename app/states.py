@@ -6,6 +6,7 @@ class OnboardingSG(StatesGroup):
     short_code = State()
     body_weight = State()
     height = State()
+    sex = State()
     experience = State()
 
 
