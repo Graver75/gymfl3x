@@ -76,6 +76,7 @@ class User(Base):
     sessions: Mapped[list[WorkoutSession]] = relationship(back_populates="user")
     body_weight_logs: Mapped[list[BodyWeightLog]] = relationship(back_populates="user")
     note_logs: Mapped[list[ExerciseNoteLog]] = relationship(back_populates="user")
+    nn_dialog_messages: Mapped[list["NnDialogMessage"]] = relationship(back_populates="user")
 
 
 class GroupChat(Base):
@@ -266,3 +267,18 @@ class RecapSent(Base):
     recap_date: Mapped[date] = mapped_column(Date)
     kind: Mapped[str] = mapped_column(String(16))  # reminder | recap
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class NnDialogMessage(Base):
+    """Per-user LLM coach dialogue (one private thread; system prompt is not stored)."""
+
+    __tablename__ = "nn_dialog_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    role: Mapped[str] = mapped_column(String(16))  # user | assistant
+    content: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user: Mapped[User] = relationship(back_populates="nn_dialog_messages")

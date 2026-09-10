@@ -43,11 +43,40 @@ RECAP_HOUR=22
 
 Несколько админов: `ADMIN_TELEGRAM_IDS=111,222`
 
-5. Запуск:
+5. Запуск (локально):
 
 ```bash
 python -m app.main
 ```
+
+Или через Docker Compose:
+
+```bash
+# один раз: перенести существующую БД в том data/
+# copy gymflex.db data\gymflex.db   # Windows
+# cp gymflex.db data/gymflex.db     # Linux/macOS
+
+docker compose up -d --build
+docker compose logs -f bot
+```
+
+Только бот (без нейросети): `docker compose up -d`.
+
+Опциональный ИИ-коуч (Ollama + Qwen, CPU, ~≥4 GB RAM):
+
+```bash
+docker compose --profile nn up -d --build
+docker compose --profile nn exec ollama ollama pull qwen2.5:1.5b-instruct
+```
+
+При лагах сервера снять нагрузку нейросети (бот продолжает работать):
+
+```bash
+docker compose --profile nn stop
+```
+
+В боте: меню «ИИ-разбор» и строка статуса в профиле (`онлайн` / `офлайн` / `выключена`).
+`NN_ENABLED=false` в `.env` отключает вызовы без остановки контейнеров.
 
 6. Напиши боту `/start` в личке, пройди онбординг.
 7. В админке создай шаблоны дней, упражнения, назначь график на неделю.
@@ -74,32 +103,24 @@ python -m app.main
 4. Так по всем упражнениям → «Закончить тренировку»
 5. Вечером в чат уходит общая сводка
 
-## Деплой на сервер (systemd + логи)
-
-Автоперезапуск делает systemd (`Restart=always`). Ошибки пишутся в `logs/gymflex.log` (ротация) и в journal.
+## Деплой (Docker Compose)
 
 ```bash
-cd /root/gymfl3x
-# venv у нас: app/venv
-sudo cp deploy/gymflex.service /etc/systemd/system/gymflex.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now gymflex
+cd /path/to/gymflex
+cp .env.example .env   # заполнить BOT_TOKEN и ADMIN_TELEGRAM_IDS
+# при миграции с хоста: cp gymflex.db data/gymflex.db
+docker compose up -d --build
 ```
 
-Логи:
+- БД и логи: том `./data` → `/data` в контейнере (`gymflex.db`, `logs/gymflex.log`)
+- Рестарт: `restart: unless-stopped`
+- Логи: `docker compose logs -f bot`
+- Рестарт бота: `docker compose restart bot`
+- ИИ-коуч: `docker compose --profile nn up -d --build` → `http://nn:8000` (Ollama внутри сети). Снять нагрузку: `docker compose --profile nn stop`
+- Модель по умолчанию: `qwen2.5:1.5b-instruct` (на 2 GB RAM лучше `qwen2.5:0.5b` через `OLLAMA_MODEL`)
 
-```bash
-journalctl -u gymflex -n 100 --no-pager
-tail -n 100 /root/gymfl3x/logs/gymflex.log
-```
-
-Статус / рестарт:
-
-```bash
-systemctl status gymflex --no-pager
-systemctl restart gymflex
-```
+Альтернатива без Docker — systemd (`deploy/gymflex.service`).
 
 ## Стек
 
-Python 3.12+, aiogram 3, SQLAlchemy 2 + SQLite (aiosqlite), APScheduler.
+Python 3.12+, aiogram 3, SQLAlchemy 2 + SQLite (aiosqlite), APScheduler, Docker Compose (`bot` + опциональный профиль `nn` / Ollama).

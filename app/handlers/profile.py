@@ -10,7 +10,9 @@ from app.db.models import LogLevel, TrainingPhase
 from app.db.session import SessionLocal
 from app.filters import PrivateChat
 from app.keyboards import main_menu, profile_kb, profile_reset_confirm_kb
+from app.services.coach_delivery import format_nn_status_line
 from app.services.metrics_log import log_body_weight
+from app.services.nn_client import get_nn_status
 from app.services.progression import PHASE_LABELS, phase_from_experience
 from app.services.users import can_open_admin, get_or_create_user, reset_own_training_data
 from app.states import ProfileSG
@@ -42,7 +44,7 @@ def _log_level_label(level: LogLevel | str | None) -> str:
     return f"{name} ({hint})" if hint else name
 
 
-def _profile_text(user) -> str:
+def _profile_text(user, *, nn_line: str | None = None) -> str:
     height = f"{user.height_cm:g} см" if user.height_cm else "—"
     months = user.experience_months if user.experience_months is not None else "—"
     if user.is_admin:
@@ -52,17 +54,24 @@ def _profile_text(user) -> str:
     else:
         role = "нет"
     log_level = getattr(user, "log_level", None) or LogLevel.minimal
-    return (
-        f"{ui.BTN_PROFILE}\n"
-        f"Имя: {user.display_name}\n"
-        f"Код: {user.short_code}\n"
-        f"Вес: {user.body_weight:g} кг\n"
-        f"Рост: {height}\n"
-        f"Стаж: {months} мес\n"
-        f"Фаза: {PHASE_LABELS[user.phase]}\n"
-        f"Лог: {_log_level_label(log_level)}\n"
-        f"Админка: {role}"
-    )
+    lines = [
+        f"{ui.BTN_PROFILE}",
+        f"Имя: {user.display_name}",
+        f"Код: {user.short_code}",
+        f"Вес: {user.body_weight:g} кг",
+        f"Рост: {height}",
+        f"Стаж: {months} мес",
+        f"Фаза: {PHASE_LABELS[user.phase]}",
+        f"Лог: {_log_level_label(log_level)}",
+        f"Админка: {role}",
+    ]
+    if nn_line:
+        lines.append(nn_line)
+    return "\n".join(lines)
+
+
+async def _nn_line() -> str:
+    return format_nn_status_line(await get_nn_status())
 
 
 @router.message(Command("profile"))
@@ -73,8 +82,9 @@ async def show_profile(message: Message, state: FSMContext) -> None:
     if not user:
         return
     log_level = getattr(user, "log_level", None) or LogLevel.minimal
+    nn_line = await _nn_line()
     await message.answer(
-        _profile_text(user) + "\n\nФаза и детализация лога — кнопки ниже.\n"
+        _profile_text(user, nn_line=nn_line) + "\n\nФаза и детализация лога — кнопки ниже.\n"
         "Вес: /weight · Стаж: /experience",
         reply_markup=profile_kb(user.phase, log_level),
     )
@@ -100,7 +110,7 @@ async def set_phase(callback: CallbackQuery) -> None:
         user.phase = phase
         await session.commit()
         log_level = getattr(user, "log_level", None) or LogLevel.minimal
-        text = _profile_text(user)
+        text = _profile_text(user, nn_line=await _nn_line())
 
     if callback.message:
         await callback.message.edit_text(
@@ -129,7 +139,7 @@ async def set_log_level(callback: CallbackQuery) -> None:
         )
         user.log_level = level
         await session.commit()
-        text = _profile_text(user)
+        text = _profile_text(user, nn_line=await _nn_line())
         phase = user.phase
 
     if callback.message:
@@ -154,7 +164,7 @@ async def profile_home_cb(callback: CallbackQuery) -> None:
             await callback.answer("Сначала /start", show_alert=True)
             return
         log_level = getattr(user, "log_level", None) or LogLevel.minimal
-        text = _profile_text(user)
+        text = _profile_text(user, nn_line=await _nn_line())
         phase = user.phase
     await callback.message.edit_text(
         text + "\n\nФаза и детализация лога — кнопки ниже.\n"
@@ -174,7 +184,8 @@ async def profile_reset_ask(callback: CallbackQuery) -> None:
         "• все тренировки и подходы\n"
         "• автоподбор весов / состояния упражнений\n"
         "• история веса тела\n"
-        "• заметки к упражнениям\n\n"
+        "• заметки к упражнениям\n"
+        "• диалог с нейросетью\n\n"
         "Останется: имя, код, текущий вес/рост/стаж/фаза, "
         "настройки лога и роли админа.\n"
         "Чужие данные и общая программа не трогаются.",
@@ -198,7 +209,7 @@ async def profile_reset_ok(callback: CallbackQuery) -> None:
             return
         stats = await reset_own_training_data(session, user.id)
         log_level = getattr(user, "log_level", None) or LogLevel.minimal
-        text = _profile_text(user)
+        text = _profile_text(user, nn_line=await _nn_line())
         phase = user.phase
         show_admin = can_open_admin(user)
     await callback.message.edit_text(

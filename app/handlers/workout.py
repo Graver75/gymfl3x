@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -53,6 +54,8 @@ from app.services.progression import (
 )
 from app.services.recap import build_personal_retrospective
 from app.services.reminders import WEEKDAY_NAMES, get_template_for_weekday
+from app.services.coach_delivery import run_coach_and_reply
+from app.services.nn_client import NnStatus, get_nn_status
 from app.services.users import can_open_admin, get_or_create_user
 from app.services.workout_ui import (
     load_template_with_exercises,
@@ -1389,6 +1392,8 @@ async def _finalize_finished_session(callback: CallbackQuery, state: FSMContext)
         await session.commit()
         text = await build_personal_retrospective(session, ws)
         show_admin = can_open_admin(user)
+        db_user_id = user.id
+        finished_session_id = ws.id
 
     await state.clear()
     await callback.message.edit_text(text)
@@ -1396,6 +1401,20 @@ async def _finalize_finished_session(callback: CallbackQuery, state: FSMContext)
         f"{ui.ICO_DONE} Готово. Сводка уйдёт в общий чат вечером.",
         reply_markup=main_menu(show_admin=show_admin),
     )
+    # Optional LLM session feedback — only if nn is online (never blocks finish)
+    try:
+        if await get_nn_status() == NnStatus.online:
+            asyncio.create_task(
+                run_coach_and_reply(
+                    bot=callback.bot,
+                    chat_id=callback.message.chat.id,
+                    user_id=db_user_id,
+                    kind="session",
+                    focus_session_id=finished_session_id,
+                )
+            )
+    except Exception:
+        pass
 
 
 @router.callback_query(F.data == "wo:cancel")

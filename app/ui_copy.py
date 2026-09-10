@@ -10,6 +10,7 @@ BTN_TODAY = "📅 Сегодня"
 BTN_HISTORY = "📜 История"
 BTN_PROGRAM = "📋 Программа"
 BTN_PROFILE = "👤 Профиль"
+BTN_COACH = "🧠 ИИ-разбор"
 BTN_ADMIN = "⚙️ Админка"
 
 # Common actions
@@ -47,6 +48,7 @@ BTN_NORMAL = "😐 Норм"
 BTN_HARD = "😤 Тяжело"
 BTN_FAILURE = "💀 Отказ"
 BTN_REP_FAIL = "🚫 Отказ"
+BTN_NOTE = "📝 Заметка"
 
 # Workout start
 BTN_MODE_TODAY = "📅 По графику сегодня"
@@ -76,6 +78,16 @@ BTN_ADM_ATHLETES_HIST = "📜 История атлетов"
 BTN_ADM_MISSING = "👀 Кто не залогировал"
 BTN_ADM_USERS = "👥 Пользователи"
 BTN_ADM_SNAPSHOT = "🧠 Снимок для NN"
+
+# Coach / NN
+BTN_COACH_WEEK = "📊 Разбор недели"
+BTN_COACH_MONTH = "📅 Разбор месяца"
+BTN_COACH_EXERCISE = "💪 Совет по упражнению"
+BTN_COACH_PROMPT = "📜 Промпт и данные"
+BTN_COACH_CLEAR = "🧹 Очистить диалог"
+BTN_COACH_CLEAR_OK = "🗑️ Да, очистить диалог"
+BTN_COACH_REFRESH = "🔄 Обновить статус"
+ICO_NN = "🧠"
 
 # Screen markers
 ICO_EXERCISE = "🏋️"

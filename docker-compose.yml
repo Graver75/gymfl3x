@@ -1,0 +1,51 @@
+services:
+  bot:
+    build: .
+    container_name: gymflex-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:////data/gymflex.db
+      LOG_FILE: /data/logs/gymflex.log
+      TZ: ${TIMEZONE:-Europe/Moscow}
+      NN_URL: ${NN_URL:-http://nn:8000}
+    volumes:
+      - ./data:/data
+    networks:
+      - gymflex
+    # No depends_on nn — bot runs alone when profile nn is down
+
+  ollama:
+    profiles: ["nn"]
+    image: ollama/ollama:latest
+    container_name: gymflex-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_models:/root/.ollama
+    networks:
+      - gymflex
+
+  nn:
+    profiles: ["nn"]
+    build:
+      context: ./services/nn
+    container_name: gymflex-nn
+    restart: unless-stopped
+    depends_on:
+      - ollama
+    environment:
+      TZ: ${TIMEZONE:-Europe/Moscow}
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b-instruct}
+    ports:
+      - "8000:8000"
+    networks:
+      - gymflex
+
+networks:
+  gymflex:
+    name: gymflex
+
+volumes:
+  ollama_models:

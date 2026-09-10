@@ -11,7 +11,7 @@ def main_menu(*, show_admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=ui.BTN_WORKOUT), KeyboardButton(text=ui.BTN_TODAY)],
         [KeyboardButton(text=ui.BTN_HISTORY), KeyboardButton(text=ui.BTN_PROGRAM)],
-        [KeyboardButton(text=ui.BTN_PROFILE)],
+        [KeyboardButton(text=ui.BTN_PROFILE), KeyboardButton(text=ui.BTN_COACH)],
     ]
     if show_admin:
         rows.append([KeyboardButton(text=ui.BTN_ADMIN)])
@@ -65,6 +65,9 @@ def profile_kb(current_phase: TrainingPhase, current_log: LogLevel) -> InlineKey
             )
         )
     rows.append(level_row)
+    rows.append(
+        [InlineKeyboardButton(text=ui.BTN_COACH, callback_data="coach:menu")]
+    )
     rows.append(
         [InlineKeyboardButton(text=ui.BTN_PROFILE_RESET, callback_data="profile:reset")]
     )
@@ -423,6 +426,10 @@ def exercise_edit_kb(
     back_label = "⬅️ К текущим" if back_cb == "adm:current" else "⬅️ К шаблону"
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [
+                InlineKeyboardButton(text="⬆️ Выше", callback_data=f"adm:ex:up:{exercise_id}"),
+                InlineKeyboardButton(text="⬇️ Ниже", callback_data=f"adm:ex:dn:{exercise_id}"),
+            ],
             [InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"adm:ex:name:{exercise_id}")],
             [InlineKeyboardButton(text="🎯 Цели (подходы/повторы)", callback_data=f"adm:ex:tgt:{exercise_id}")],
             [InlineKeyboardButton(text="↗️ В другой шаблон", callback_data=f"adm:ex:move:{exercise_id}")],
@@ -710,3 +717,77 @@ def history_back_kb(to: str = "hist:home") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text=ui.BTN_BACK, callback_data=to)]]
     )
+
+
+def coach_menu_kb(*, online: bool, turns: int = 0) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if online:
+        rows.extend(
+            [
+                [InlineKeyboardButton(text=ui.BTN_COACH_WEEK, callback_data="coach:week")],
+                [InlineKeyboardButton(text=ui.BTN_COACH_MONTH, callback_data="coach:month")],
+                [
+                    InlineKeyboardButton(
+                        text=ui.BTN_COACH_EXERCISE, callback_data="coach:exlist"
+                    )
+                ],
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text=ui.BTN_COACH_PROMPT, callback_data="coach:prompt")]
+    )
+    clear_label = ui.BTN_COACH_CLEAR
+    if turns:
+        clear_label = f"{ui.BTN_COACH_CLEAR} ({turns})"
+    rows.append(
+        [InlineKeyboardButton(text=clear_label, callback_data="coach:clear")]
+    )
+    rows.append(
+        [InlineKeyboardButton(text=ui.BTN_COACH_REFRESH, callback_data="coach:refresh")]
+    )
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="profile:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def coach_clear_confirm_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=ui.BTN_COACH_CLEAR_OK, callback_data="coach:clearok"
+                )
+            ],
+            [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="coach:menu")],
+        ]
+    )
+
+
+def coach_prompt_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="coach:menu")],
+        ]
+    )
+
+
+def coach_exercises_kb(
+    items: list[tuple[int, str]],
+    *,
+    page: int = 0,
+    per_page: int = 8,
+) -> InlineKeyboardMarkup:
+    start = page * per_page
+    chunk = items[start : start + per_page]
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text=name[:40], callback_data=f"coach:e:{ex_id}")]
+        for ex_id, name in chunk
+    ]
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"coach:expage:{page - 1}"))
+    if start + per_page < len(items):
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"coach:expage:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="coach:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)

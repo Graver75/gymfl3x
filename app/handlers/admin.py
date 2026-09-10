@@ -125,12 +125,36 @@ async def _reindex_positions(session, template_id: int) -> None:
         ex.position = i
 
 
+async def _shift_exercise_position(session, exercise_id: int, delta: int) -> tuple[bool, str]:
+    """Move exercise up (delta=-1) or down (delta=+1) within its template."""
+    ex = await session.get(TemplateExercise, exercise_id)
+    if not ex:
+        return False, "Упражнение удалено"
+    result = await session.execute(
+        select(TemplateExercise)
+        .where(TemplateExercise.template_id == ex.template_id)
+        .order_by(TemplateExercise.position, TemplateExercise.id)
+    )
+    siblings = list(result.scalars().all())
+    idx = next((i for i, item in enumerate(siblings) if item.id == ex.id), None)
+    if idx is None:
+        return False, "Не найдено"
+    new_idx = idx + delta
+    if new_idx < 0 or new_idx >= len(siblings):
+        return False, "Уже крайнее"
+    siblings[idx], siblings[new_idx] = siblings[new_idx], siblings[idx]
+    for i, item in enumerate(siblings):
+        item.position = i
+    await session.commit()
+    return True, "Ок"
+
+
 def _template_text(tpl: WorkoutTemplate) -> str:
     lines = [f"{tpl.name} (#{tpl.hashtag})", ""]
     if not tpl.exercises:
         lines.append("Упражнений пока нет.")
     else:
-        lines.append("Нажми упражнение, чтобы изменить / удалить / перенести:")
+        lines.append("Нажми упражнение — править, сменить порядок (⬆️⬇️), удалить:")
         for ex in tpl.exercises:
             lines.append(
                 f"{ex.position + 1}. {ex.name} — "
@@ -153,6 +177,7 @@ def _exercise_text(ex: TemplateExercise, template_name: str) -> str:
     return (
         f"{ex.name}\n"
         f"Шаблон: {template_name}\n"
+        f"Позиция: {ex.position + 1}\n"
         f"Цель: {ex.target_sets}×{ex.target_reps_min}-{ex.target_reps_max}\n"
         f"Шаг веса: {ex.weight_step:g} кг"
     )
@@ -468,6 +493,40 @@ async def adm_ex_targets(message: Message, state: FSMContext) -> None:
             f"{item.target_sets}×{item.target_reps_min}-{item.target_reps_max}"
         )
     await message.answer("\n".join(lines), reply_markup=template_detail_kb(tpl_id, tpl.exercises))
+
+
+@router.callback_query(F.data.regexp(r"^adm:ex:(up|dn):\d+$"))
+async def adm_ex_reorder(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.data is None or callback.from_user is None or callback.message is None:
+        return
+    if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    direction = -1 if parts[2] == "up" else 1
+    ex_id = int(parts[3])
+    data = await state.get_data()
+    back = data.get("ex_back")
+    async with SessionLocal() as session:
+        ok, msg = await _shift_exercise_position(session, ex_id, direction)
+        if not ok:
+            await callback.answer(msg, show_alert=True)
+            return
+        ex = await session.get(TemplateExercise, ex_id)
+        if not ex:
+            await callback.answer("Удалено", show_alert=True)
+            return
+        tpl = await _load_template(session, ex.template_id)
+        tpl_id = ex.template_id
+        if back == "adm:current":
+            kb_back = "adm:current"
+        else:
+            kb_back = f"adm:tpl:{tpl_id}"
+        await callback.message.edit_text(
+            _exercise_text(ex, tpl.name if tpl else "?"),
+            reply_markup=exercise_edit_kb(ex_id, tpl_id, back=kb_back),
+        )
+    await callback.answer("Порядок обновлён")
 
 
 @router.callback_query(F.data.startswith("adm:ex:view:"))

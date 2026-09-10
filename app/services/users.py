@@ -7,6 +7,7 @@ from app.config import get_settings
 from app.db.models import (
     BodyWeightLog,
     ExerciseNoteLog,
+    NnDialogMessage,
     User,
     UserExerciseState,
     WorkoutSession,
@@ -95,10 +96,14 @@ async def reset_own_training_data(session: AsyncSession, user_id: int) -> dict[s
     bw = await session.execute(
         delete(BodyWeightLog).where(BodyWeightLog.user_id == user_id)
     )
+    dialog = await session.execute(
+        delete(NnDialogMessage).where(NnDialogMessage.user_id == user_id)
+    )
     await session.commit()
     return {
         "sessions": sessions.rowcount or 0,
         "exercise_states": states.rowcount or 0,
         "body_weight_logs": bw.rowcount or 0,
         "note_logs": notes.rowcount or 0,
+        "nn_dialog": dialog.rowcount or 0,
     }
