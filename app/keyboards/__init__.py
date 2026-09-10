@@ -39,7 +39,12 @@ def phase_kb(current: TrainingPhase) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def profile_kb(current_phase: TrainingPhase, current_log: LogLevel) -> InlineKeyboardMarkup:
+def profile_kb(
+    current_phase: TrainingPhase,
+    current_log: LogLevel,
+    *,
+    sex: str | None = None,
+) -> InlineKeyboardMarkup:
     rows = []
     for phase in TrainingPhase:
         mark = "✓ " if phase == current_phase else ""
@@ -65,6 +70,21 @@ def profile_kb(current_phase: TrainingPhase, current_log: LogLevel) -> InlineKey
             )
         )
     rows.append(level_row)
+    male_m = "✓ " if sex == "male" else ""
+    female_m = "✓ " if sex == "female" else ""
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=f"{male_m}Пол: М", callback_data="profile:sex:male"
+            ),
+            InlineKeyboardButton(
+                text=f"{female_m}Пол: Ж", callback_data="profile:sex:female"
+            ),
+        ]
+    )
+    rows.append(
+        [InlineKeyboardButton(text=ui.BTN_PROFILE_PROGRESS, callback_data="profile:progress")]
+    )
     rows.append(
         [InlineKeyboardButton(text=ui.BTN_COACH, callback_data="coach:menu")]
     )
@@ -347,6 +367,7 @@ def admin_menu_kb(*, full: bool = True) -> InlineKeyboardMarkup:
                 [InlineKeyboardButton(text=ui.BTN_ADM_MISSING, callback_data="adm:missing")],
                 [InlineKeyboardButton(text=ui.BTN_ADM_USERS, callback_data="adm:users")],
                 [InlineKeyboardButton(text=ui.BTN_ADM_CHATS, callback_data="adm:chats")],
+                [InlineKeyboardButton(text=ui.BTN_ADM_LEVELS, callback_data="adm:levels")],
                 [InlineKeyboardButton(text=ui.BTN_ADM_SNAPSHOT, callback_data="adm:snapshot")],
                 [InlineKeyboardButton(text=ui.BTN_ADM_NN_LOAD, callback_data="adm:nnload")],
             ]
@@ -389,6 +410,70 @@ def admin_compose_cancel_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=ui.BTN_CANCEL, callback_data="adm:chat:cancel")],
+        ]
+    )
+
+
+def admin_levels_kb(items: list, *, page: int = 0) -> InlineKeyboardMarkup:
+    """items: ExerciseStrengthStandard rows."""
+    page_size = 8
+    start = page * page_size
+    chunk = items[start : start + page_size]
+    rows: list[list[InlineKeyboardButton]] = []
+    for std in chunk:
+        mark = "⚠ " if std.needs_review else ""
+        mode = "R" if std.mode == "reps" else "×"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{mark}{mode} {std.name}"[:58],
+                    callback_data=f"adm:lvl:{std.id}",
+                )
+            ]
+        )
+    pages = max(1, (len(items) + page_size - 1) // page_size) if items else 1
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="‹", callback_data=f"adm:levels:p:{page - 1}"))
+    if pages > 1:
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{pages}", callback_data="adm:noop"))
+    if page + 1 < pages:
+        nav.append(InlineKeyboardButton(text="›", callback_data=f"adm:levels:p:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    if not chunk:
+        rows.append([InlineKeyboardButton(text="📭 Пока пусто", callback_data="adm:noop")])
+    rows.append(
+        [InlineKeyboardButton(text="🔄 Синхронизировать каталог", callback_data="adm:levels:sync")]
+    )
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_level_detail_kb(std_id: int, *, mode: str) -> InlineKeyboardMarkup:
+    other = "reps" if mode == "ratio" else "ratio"
+    other_label = "Переключить на reps" if mode == "ratio" else "Переключить на ×BW"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✏️ Пороги М", callback_data=f"adm:lvl:edit:{std_id}:male"
+                ),
+                InlineKeyboardButton(
+                    text="✏️ Пороги Ж", callback_data=f"adm:lvl:edit:{std_id}:female"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=other_label, callback_data=f"adm:lvl:mode:{std_id}:{other}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="↩️ Сброс к сиду", callback_data=f"adm:lvl:reset:{std_id}"
+                )
+            ],
+            [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:levels")],
         ]
     )
 

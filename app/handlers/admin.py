@@ -14,6 +14,7 @@ from app import ui_copy as ui
 from app.config import get_settings
 from app.db.models import (
     ExerciseArchive,
+    ExerciseStrengthStandard,
     GroupChat,
     ScheduleDay,
     TemplateExercise,
@@ -26,6 +27,8 @@ from app.filters import PrivateChat
 from app.keyboards import (
     admin_chats_kb,
     admin_compose_cancel_kb,
+    admin_level_detail_kb,
+    admin_levels_kb,
     admin_menu_kb,
     admin_nn_load_kb,
     admin_users_kb,
@@ -50,6 +53,14 @@ from app.services.archive import (
 )
 from app.services.group_chats import format_chats_report, refresh_destinations
 from app.services.reminders import WEEKDAY_NAMES
+from app.services.strength_levels import (
+    LEVEL_LABELS,
+    list_standards,
+    reset_standard_to_seed,
+    set_thresholds,
+    sync_standards_from_catalog,
+    thresholds_for,
+)
 from app.services.users import get_or_create_user
 from app.states import AdminSG
 
@@ -1103,6 +1114,209 @@ async def adm_missing_today(callback: CallbackQuery) -> None:
         full = user.is_admin
     await callback.message.edit_text(text, reply_markup=admin_menu_kb(full=full))
     await callback.answer()
+
+
+def _format_level_card(std: ExerciseStrengthStandard) -> str:
+    unit = "повт." if std.mode == "reps" else "×BW"
+    male = thresholds_for(std, "male")
+    female = thresholds_for(std, "female")
+    labels = " → ".join(LEVEL_LABELS)
+    review = " ⚠ needs review" if std.needs_review else ""
+    return (
+        f"{ui.b(ui.BTN_ADM_LEVELS)}{review}\n"
+        f"{ui.b(std.name)}\n"
+        f"mode: <code>{ui.esc(std.mode)}</code> ({unit})\n"
+        f"Уровни: {labels}\n\n"
+        f"<b>М:</b> {' · '.join(f'{v:g}' for v in male)}\n"
+        f"<b>Ж:</b> {' · '.join(f'{v:g}' for v in female)}\n\n"
+        "Правка: 5 чисел через пробел, строго по возрастанию."
+    )
+
+
+@router.callback_query(F.data == "adm:levels")
+@router.callback_query(F.data.startswith("adm:levels:p:"))
+async def adm_levels(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await state.clear()
+    page = 0
+    if callback.data and callback.data.startswith("adm:levels:p:"):
+        try:
+            page = int(callback.data.split(":")[-1])
+        except ValueError:
+            page = 0
+    async with SessionLocal() as session:
+        items = await list_standards(session)
+    review_n = sum(1 for s in items if s.needs_review)
+    text = (
+        f"{ui.b(ui.BTN_ADM_LEVELS)}\n"
+        f"Эталонов: {len(items)}"
+        + (f", ⚠ review: {review_n}" if review_n else "")
+        + "\n× = e1RM/BW, R = повторы.\nВыбери упражнение:"
+    )
+    await callback.message.edit_text(text, reply_markup=admin_levels_kb(items, page=page))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "adm:levels:sync")
+async def adm_levels_sync(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    async with SessionLocal() as session:
+        added = await sync_standards_from_catalog(session)
+        items = await list_standards(session)
+    await callback.message.edit_text(
+        f"{ui.b(ui.BTN_ADM_LEVELS)}\n"
+        f"Синхронизация: +{added} новых.\nВсего: {len(items)}.",
+        reply_markup=admin_levels_kb(items, page=0),
+    )
+    await callback.answer(f"+{added}")
+
+
+@router.callback_query(F.data.regexp(r"^adm:lvl:\d+$"))
+async def adm_level_detail(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    if not await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await state.clear()
+    std_id = int(callback.data.split(":")[-1])
+    async with SessionLocal() as session:
+        std = await session.get(ExerciseStrengthStandard, std_id)
+    if not std:
+        await callback.answer("Не найдено", show_alert=True)
+        return
+    await callback.message.edit_text(
+        _format_level_card(std),
+        reply_markup=admin_level_detail_kb(std.id, mode=std.mode),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:lvl:mode:"))
+async def adm_level_toggle_mode(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    if not await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    std_id = int(parts[3])
+    new_mode = parts[4]
+    if new_mode not in {"ratio", "reps"}:
+        await callback.answer("Плохой mode", show_alert=True)
+        return
+    async with SessionLocal() as session:
+        std = await session.get(ExerciseStrengthStandard, std_id)
+        if not std:
+            await callback.answer("Не найдено", show_alert=True)
+            return
+        std.mode = new_mode
+        await session.commit()
+        await session.refresh(std)
+        card = _format_level_card(std)
+        mode = std.mode
+        sid = std.id
+    await callback.message.edit_text(card, reply_markup=admin_level_detail_kb(sid, mode=mode))
+    await callback.answer(f"mode={new_mode}")
+
+
+@router.callback_query(F.data.startswith("adm:lvl:reset:"))
+async def adm_level_reset(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    if not await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    std_id = int(callback.data.split(":")[-1])
+    async with SessionLocal() as session:
+        std = await reset_standard_to_seed(session, std_id)
+    if not std:
+        await callback.answer("Нет сида для сброса", show_alert=True)
+        return
+    await callback.message.edit_text(
+        _format_level_card(std),
+        reply_markup=admin_level_detail_kb(std.id, mode=std.mode),
+    )
+    await callback.answer("Сброшено")
+
+
+@router.callback_query(F.data.startswith("adm:lvl:edit:"))
+async def adm_level_edit_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    if not await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    std_id = int(parts[3])
+    sex = parts[4]
+    if sex not in {"male", "female"}:
+        await callback.answer("Пол?", show_alert=True)
+        return
+    async with SessionLocal() as session:
+        std = await session.get(ExerciseStrengthStandard, std_id)
+    if not std:
+        await callback.answer("Не найдено", show_alert=True)
+        return
+    await state.set_state(AdminSG.edit_level_thresholds)
+    await state.update_data(lvl_std_id=std_id, lvl_sex=sex)
+    unit = "повт." if std.mode == "reps" else "×BW"
+    sex_l = "М" if sex == "male" else "Ж"
+    cur = " ".join(f"{v:g}" for v in thresholds_for(std, sex))
+    await callback.message.answer(
+        f"Пороги <b>{ui.esc(std.name)}</b> ({sex_l}), mode={std.mode}, единицы: {unit}\n"
+        f"Сейчас: <code>{ui.esc(cur)}</code>\n\n"
+        "Пришли 5 чисел через пробел, например:\n"
+        "<code>0.45 0.7 1.0 1.35 1.7</code>"
+    )
+    await callback.answer()
+
+
+@router.message(AdminSG.edit_level_thresholds)
+async def adm_level_edit_save(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if not await _full_admin(message.from_user.id, message.from_user.full_name or "Admin"):
+        return
+    data = await state.get_data()
+    std_id = data.get("lvl_std_id")
+    sex = data.get("lvl_sex")
+    parts = (message.text or "").replace(",", ".").split()
+    try:
+        values = [float(x) for x in parts]
+        if len(values) != 5:
+            raise ValueError("need_5")
+    except ValueError:
+        await message.answer("Нужно ровно 5 чисел через пробел.")
+        return
+    async with SessionLocal() as session:
+        std = await session.get(ExerciseStrengthStandard, int(std_id))
+        if not std:
+            await state.clear()
+            await message.answer("Эталон пропал.")
+            return
+        try:
+            set_thresholds(std, str(sex), values)
+        except ValueError as exc:
+            if str(exc) == "not_increasing":
+                await message.answer("Числа должны строго возрастать.")
+                return
+            await message.answer("Нужно ровно 5 чисел.")
+            return
+        await session.commit()
+        await session.refresh(std)
+        card = _format_level_card(std)
+        sid, mode = std.id, std.mode
+    await state.clear()
+    await message.answer(card, reply_markup=admin_level_detail_kb(sid, mode=mode))
 
 
 @router.callback_query(F.data == "adm:chats")

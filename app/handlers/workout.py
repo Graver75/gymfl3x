@@ -58,6 +58,10 @@ from app.services.recap import build_personal_retrospective
 from app.services.reminders import WEEKDAY_NAMES, get_template_for_weekday
 from app.services.coach_delivery import run_coach_and_reply
 from app.services.nn_client import NnStatus, get_nn_status
+from app.services.strength_levels import (
+    evaluate_logged_exercise,
+    format_level_feedback,
+)
 from app.services.users import can_open_admin, get_or_create_user
 from app.services.workout_ui import (
     load_template_with_exercises,
@@ -1257,6 +1261,16 @@ async def pick_difficulty(callback: CallbackQuery, state: FSMContext) -> None:
 
         await session.commit()
 
+        target_reps = int(getattr(exercise, "target_reps_min", None) or 10)
+        level_res = await evaluate_logged_exercise(
+            session,
+            user,
+            exercise_name=exercise.name,
+            parts=logged,
+            target_reps=target_reps,
+        )
+        level_text = format_level_feedback(level_res)
+
         result = await session.execute(
             select(WorkoutSession)
             .where(WorkoutSession.id == ws.id)
@@ -1268,9 +1282,10 @@ async def pick_difficulty(callback: CallbackQuery, state: FSMContext) -> None:
             template = await load_template_with_exercises(session, ws.template_id)
 
         summary = (
-            f"{ui.ICO_DONE} Записал: {exercise.name}\n"
+            f"{ui.ICO_DONE} Записал: {ui.b(exercise.name)}\n"
             f"{user.short_code} {format_logged_parts(logged)} {DIFFICULTY_LABELS[difficulty]}\n"
-            f"Следующий вес: {suggested:g} кг ({note})"
+            f"Следующий вес: {suggested:g} кг ({note})\n\n"
+            f"{level_text}"
         )
 
         await state.update_data(

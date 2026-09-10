@@ -40,6 +40,8 @@ async def _add_missing_columns(conn) -> None:
         await conn.execute(
             text("ALTER TABLE users ADD COLUMN log_level VARCHAR(16) DEFAULT 'minimal'")
         )
+    if "sex" not in cols:
+        await conn.execute(text("ALTER TABLE users ADD COLUMN sex VARCHAR(16)"))
 
     result = await conn.execute(text("PRAGMA table_info(sessions)"))
     cols = {row[1] for row in result}

@@ -42,6 +42,7 @@ class AdminSG(StatesGroup):
     edit_exercise_targets = State()
     set_hours = State()
     compose_chat = State()
+    edit_level_thresholds = State()
 
 
 class ProfileSG(StatesGroup):

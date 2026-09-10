@@ -14,6 +14,7 @@ from app.services.coach_delivery import format_nn_status_line
 from app.services.metrics_log import log_body_weight
 from app.services.nn_client import get_nn_status
 from app.services.progression import PHASE_LABELS, phase_from_experience
+from app.services.strength_levels import profile_progress_lines
 from app.services.users import can_open_admin, get_or_create_user, reset_own_training_data
 from app.states import ProfileSG
 
@@ -54,13 +55,16 @@ def _profile_text(user, *, nn_line: str | None = None) -> str:
     else:
         role = "нет"
     log_level = getattr(user, "log_level", None) or LogLevel.minimal
+    sex = getattr(user, "sex", None)
+    sex_label = "Ж" if sex == "female" else ("М" if sex == "male" else "не указан")
     lines = [
         f"{ui.b(ui.BTN_PROFILE)}",
         f"Имя: {ui.b(user.display_name)}",
         f"Код: {ui.b(user.short_code)}",
-        f"Вес: {ui.b(f'{user.body_weight:g} кг')}",
+        f"Вес: {ui.b(f'{user.body_weight:g} кг') if user.body_weight else ui.b('—')}",
         f"Рост: {ui.b(height)}",
         f"Стаж: {ui.b(f'{months} мес')}",
+        f"Пол (для уровней): {ui.b(sex_label)}",
         f"Фаза: {ui.b(PHASE_LABELS[user.phase])}",
         f"Лог: {ui.b(_log_level_label(log_level))}",
         f"Админка: {ui.b(role)}",
@@ -84,9 +88,9 @@ async def show_profile(message: Message, state: FSMContext) -> None:
     log_level = getattr(user, "log_level", None) or LogLevel.minimal
     nn_line = await _nn_line()
     await message.answer(
-        _profile_text(user, nn_line=nn_line) + "\n\nФаза и детализация лога — кнопки ниже.\n"
+        _profile_text(user, nn_line=nn_line) + "\n\nФаза, пол и детализация лога — кнопки ниже.\n"
         "Вес: /weight · Стаж: /experience",
-        reply_markup=profile_kb(user.phase, log_level),
+        reply_markup=profile_kb(user.phase, log_level, sex=getattr(user, "sex", None)),
     )
 
 
@@ -110,12 +114,13 @@ async def set_phase(callback: CallbackQuery) -> None:
         user.phase = phase
         await session.commit()
         log_level = getattr(user, "log_level", None) or LogLevel.minimal
+        sex = getattr(user, "sex", None)
         text = _profile_text(user, nn_line=await _nn_line())
 
     if callback.message:
         await callback.message.edit_text(
-            text + "\n\nФаза и детализация лога — кнопки ниже.",
-            reply_markup=profile_kb(phase, log_level),
+            text + "\n\nФаза, пол и детализация лога — кнопки ниже.",
+            reply_markup=profile_kb(phase, log_level, sex=sex),
         )
     await callback.answer("Фаза сохранена")
 
@@ -141,13 +146,69 @@ async def set_log_level(callback: CallbackQuery) -> None:
         await session.commit()
         text = _profile_text(user, nn_line=await _nn_line())
         phase = user.phase
+        sex = getattr(user, "sex", None)
 
     if callback.message:
         await callback.message.edit_text(
-            text + "\n\nФаза и детализация лога — кнопки ниже.",
-            reply_markup=profile_kb(phase, level),
+            text + "\n\nФаза, пол и детализация лога — кнопки ниже.",
+            reply_markup=profile_kb(phase, level, sex=sex),
         )
     await callback.answer(f"Лог: {ui.LOG_LEVEL_LABELS.get(level.value, level.value)}")
+
+
+@router.callback_query(F.data.startswith("profile:sex:"))
+async def set_sex(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.data is None or callback.message is None:
+        return
+    sex = callback.data.split(":")[-1]
+    if sex not in {"male", "female"}:
+        await callback.answer("Некорректно")
+        return
+    async with SessionLocal() as session:
+        user = await get_or_create_user(
+            session,
+            callback.from_user.id,
+            callback.from_user.full_name or "Athlete",
+        )
+        user.sex = sex
+        await session.commit()
+        log_level = getattr(user, "log_level", None) or LogLevel.minimal
+        text = _profile_text(user, nn_line=await _nn_line())
+        phase = user.phase
+    await callback.message.edit_text(
+        text + "\n\nФаза, пол и детализация лога — кнопки ниже.",
+        reply_markup=profile_kb(phase, log_level, sex=sex),
+    )
+    await callback.answer("Пол сохранён")
+
+
+@router.callback_query(F.data == "profile:progress")
+async def profile_progress(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    async with SessionLocal() as session:
+        user = await get_or_create_user(
+            session,
+            callback.from_user.id,
+            callback.from_user.full_name or "Athlete",
+        )
+        if not user.onboarding_done:
+            await callback.answer("Сначала /start", show_alert=True)
+            return
+        text = await profile_progress_lines(session, user)
+    if len(text) > 4000:
+        text = text[:3990] + "…"
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="profile:home")]
+            ]
+        ),
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "profile:home")
@@ -166,10 +227,11 @@ async def profile_home_cb(callback: CallbackQuery) -> None:
         log_level = getattr(user, "log_level", None) or LogLevel.minimal
         text = _profile_text(user, nn_line=await _nn_line())
         phase = user.phase
+        sex = getattr(user, "sex", None)
     await callback.message.edit_text(
-        text + "\n\nФаза и детализация лога — кнопки ниже.\n"
+        text + "\n\nФаза, пол и детализация лога — кнопки ниже.\n"
         "Вес: /weight · Стаж: /experience",
-        reply_markup=profile_kb(phase, log_level),
+        reply_markup=profile_kb(phase, log_level, sex=sex),
     )
     await callback.answer()
 
@@ -211,6 +273,7 @@ async def profile_reset_ok(callback: CallbackQuery) -> None:
         log_level = getattr(user, "log_level", None) or LogLevel.minimal
         text = _profile_text(user, nn_line=await _nn_line())
         phase = user.phase
+        sex = getattr(user, "sex", None)
         show_admin = can_open_admin(user)
     await callback.message.edit_text(
         "Готово, данные обнулены.\n"
@@ -219,8 +282,8 @@ async def profile_reset_ok(callback: CallbackQuery) -> None:
         f"логов веса: {stats['body_weight_logs']}, "
         f"заметок: {stats['note_logs']}.\n\n"
         + text
-        + "\n\nФаза и детализация лога — кнопки ниже.",
-        reply_markup=profile_kb(phase, log_level),
+        + "\n\nФаза, пол и детализация лога — кнопки ниже.",
+        reply_markup=profile_kb(phase, log_level, sex=sex),
     )
     await callback.message.answer(
         "Можно начинать с чистого листа.",

@@ -69,6 +69,7 @@ class User(Base):
     )
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     is_program_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    sex: Mapped[str | None] = mapped_column(String(16), nullable=True)  # male | female
     onboarding_done: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -247,6 +248,33 @@ class ExerciseArchive(Base):
     target_reps_min: Mapped[int] = mapped_column(Integer, default=8)
     target_reps_max: Mapped[int] = mapped_column(Integer, default=12)
     weight_step: Mapped[float] = mapped_column(Float, default=2.5)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class ExerciseStrengthStandard(Base):
+    """Bodyweight (or reps) thresholds for 5 strength levels per exercise."""
+
+    __tablename__ = "exercise_strength_standard"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+    name_key: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    mode: Mapped[str] = mapped_column(String(16), default="ratio")  # ratio | reps
+    male_t1: Mapped[float] = mapped_column(Float, default=0.3)
+    male_t2: Mapped[float] = mapped_column(Float, default=0.5)
+    male_t3: Mapped[float] = mapped_column(Float, default=0.75)
+    male_t4: Mapped[float] = mapped_column(Float, default=1.0)
+    male_t5: Mapped[float] = mapped_column(Float, default=1.25)
+    female_t1: Mapped[float] = mapped_column(Float, default=0.2)
+    female_t2: Mapped[float] = mapped_column(Float, default=0.35)
+    female_t3: Mapped[float] = mapped_column(Float, default=0.5)
+    female_t4: Mapped[float] = mapped_column(Float, default=0.7)
+    female_t5: Mapped[float] = mapped_column(Float, default=0.9)
+    needs_review: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
