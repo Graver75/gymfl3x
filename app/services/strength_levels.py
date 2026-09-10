@@ -26,8 +26,20 @@ from app.db.models import (
 from app.services.archive import name_key
 
 NUM_LEVELS = 10
-LEVEL_LABELS = tuple(f"Уровень {i}" for i in range(1, NUM_LEVELS + 1))
-BELOW_LABEL = "ниже уровня 1"
+# 1 ≈ child-easy … 10 ≈ super-athlete (fun gym ladder)
+LEVEL_LABELS = (
+    "Росток",  # 1 — почти детский вес
+    "Новичок",  # 2 — Beginner (Strength Level)
+    "Ученик",  # 3
+    "Боец",  # 4 — Novice
+    "Атлет",  # 5
+    "Силач",  # 6 — Intermediate
+    "Зверь",  # 7
+    "Чемпион",  # 8 — Advanced
+    "Титан",  # 9
+    "Легенда",  # 10 — выше Elite
+)
+BELOW_LABEL = "до Ростка"
 _MALE_ATTRS = tuple(f"male_t{i}" for i in range(1, NUM_LEVELS + 1))
 _FEMALE_ATTRS = tuple(f"female_t{i}" for i in range(1, NUM_LEVELS + 1))
 
@@ -414,7 +426,7 @@ def format_level_feedback(result: LevelResult) -> str:
                 f"≈ ~{ww} кг на {result.target_reps} повт."
             )
     elif result.level_index == NUM_LEVELS - 1:
-        lines.append("Ты на максимальном уровне шкалы — уровень 10.")
+        lines.append(f"Ты на вершине шкалы — <b>{LEVEL_LABELS[-1]}</b>.")
     if result.needs_review:
         lines.append("<i>Шкала помечена «нужен review» в админке.</i>")
     return "\n".join(lines)

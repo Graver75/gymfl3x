@@ -54,6 +54,7 @@ from app.services.archive import (
 from app.services.group_chats import format_chats_report, refresh_destinations
 from app.services.reminders import WEEKDAY_NAMES
 from app.services.strength_levels import (
+    LEVEL_LABELS,
     list_standards,
     reset_standard_to_seed,
     set_thresholds,
@@ -1119,16 +1120,18 @@ def _format_level_card(std: ExerciseStrengthStandard) -> str:
     unit = "повт." if std.mode == "reps" else "×BW"
     male = thresholds_for(std, "male")
     female = thresholds_for(std, "female")
-    labels = "1→2→…→10"
+    labels = " → ".join(LEVEL_LABELS)
     review = " ⚠ needs review" if std.needs_review else ""
+    male_nums = " · ".join(f"{v:g}" for v in male)
+    female_nums = " · ".join(f"{v:g}" for v in female)
     return (
         f"{ui.b(ui.BTN_ADM_LEVELS)}{review}\n"
         f"{ui.b(std.name)}\n"
         f"mode: <code>{ui.esc(std.mode)}</code> ({unit})\n"
         f"Уровни: {labels}\n\n"
-        f"<b>М:</b> {' · '.join(f'{v:g}' for v in male)}\n"
-        f"<b>Ж:</b> {' · '.join(f'{v:g}' for v in female)}\n\n"
-        "Правка: 10 чисел через пробел, строго по возрастанию."
+        f"<b>М:</b> {male_nums}\n"
+        f"<b>Ж:</b> {female_nums}\n\n"
+        "Правка: 10 чисел через пробел (Росток→…→Легенда), строго по возрастанию."
     )
 
 
@@ -1273,7 +1276,7 @@ async def adm_level_edit_start(callback: CallbackQuery, state: FSMContext) -> No
     await callback.message.answer(
         f"Пороги <b>{ui.esc(std.name)}</b> ({sex_l}), mode={std.mode}, единицы: {unit}\n"
         f"Сейчас: <code>{ui.esc(cur)}</code>\n\n"
-        "Пришли 10 чисел через пробел (ур.1→10), например:\n"
+        "Пришли 10 чисел через пробел (Росток→…→Легенда), например:\n"
         "<code>0.28 0.5 0.62 0.75 0.88 1.0 1.25 1.5 1.62 2.06</code>"
     )
     await callback.answer()
