@@ -39,7 +39,13 @@ from app.keyboards import (
     template_detail_kb,
     templates_list_kb,
 )
-from app.services.archive import add_exercise_to_template, list_archive, name_key, upsert_archive
+from app.services.archive import (
+    add_exercise_to_template,
+    list_archive,
+    name_key,
+    sync_catalog,
+    upsert_archive,
+)
 from app.services.reminders import WEEKDAY_NAMES
 from app.services.users import get_or_create_user
 from app.states import AdminSG
@@ -351,15 +357,16 @@ async def adm_ex_add(callback: CallbackQuery, state: FSMContext) -> None:
     tpl_id = int(callback.data.split(":")[-1])
     async with SessionLocal() as session:
         tpl = await _load_template(session, tpl_id)
-        items = await list_archive(session)
+        items = await sync_catalog(session)
         in_tpl = {name_key(ex.name) for ex in (tpl.exercises if tpl else [])}
-        unused = [i for i in items if i.name_key not in in_tpl]
     if not tpl:
         await callback.answer("Шаблон не найден", show_alert=True)
         return
     await callback.message.edit_text(
-        "Добавить упражнение. Из архива — одним нажатием, либо новое:",
-        reply_markup=archive_pick_kb(tpl_id, unused, 0),
+        "Добавить упражнение.\n"
+        "Каталог = архив + все активные из шаблонов. "
+        "✓ уже в этом шаблоне. Остальные — одним нажатием, либо «Новое»:",
+        reply_markup=archive_pick_kb(tpl_id, items, 0, in_template_keys=in_tpl),
     )
     await callback.answer()
 
@@ -376,10 +383,11 @@ async def adm_ex_pick_page(callback: CallbackQuery) -> None:
     page = int(parts[4])
     async with SessionLocal() as session:
         tpl = await _load_template(session, tpl_id)
-        items = await list_archive(session)
+        items = await sync_catalog(session)
         in_tpl = {name_key(ex.name) for ex in (tpl.exercises if tpl else [])}
-        unused = [i for i in items if i.name_key not in in_tpl]
-    await callback.message.edit_reply_markup(reply_markup=archive_pick_kb(tpl_id, unused, page))
+    await callback.message.edit_reply_markup(
+        reply_markup=archive_pick_kb(tpl_id, items, page, in_template_keys=in_tpl)
+    )
     await callback.answer()
 
 

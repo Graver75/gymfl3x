@@ -55,6 +55,12 @@ async def list_archive(session: AsyncSession) -> list[ExerciseArchive]:
     return list(result.scalars().all())
 
 
+async def sync_catalog(session: AsyncSession) -> list[ExerciseArchive]:
+    """Archive + all template (active) names — any exercise ever added to a program."""
+    await backfill_archive(session)
+    return await list_archive(session)
+
+
 async def backfill_archive(session: AsyncSession) -> int:
     before = (await session.execute(select(ExerciseArchive))).scalars().all()
     start = len(before)

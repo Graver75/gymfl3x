@@ -543,18 +543,39 @@ def _page_nav(page: int, total: int, prefix: str) -> list[list[InlineKeyboardBut
     return [row]
 
 
-def archive_pick_kb(template_id: int, items: list, page: int = 0) -> InlineKeyboardMarkup:
+def archive_pick_kb(
+    template_id: int,
+    items: list,
+    page: int = 0,
+    *,
+    in_template_keys: set[str] | None = None,
+) -> InlineKeyboardMarkup:
+    """Full catalog; exercises already in this template are shown as ✓ (noop)."""
+    in_tpl = in_template_keys or set()
     start = page * ARCHIVE_PAGE
     chunk = items[start : start + ARCHIVE_PAGE]
-    rows = [
-        [
-            InlineKeyboardButton(
-                text=item.name,
-                callback_data=f"adm:ex:from:{template_id}:{item.id}",
+    rows = []
+    for item in chunk:
+        if item.name_key in in_tpl:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"✓ {item.name}",
+                        callback_data="adm:noop",
+                    )
+                ]
             )
-        ]
-        for item in chunk
-    ]
+        else:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=item.name,
+                        callback_data=f"adm:ex:from:{template_id}:{item.id}",
+                    )
+                ]
+            )
+    if not chunk:
+        rows.append([InlineKeyboardButton(text="📭 Пока пусто", callback_data="adm:noop")])
     rows.extend(_page_nav(page, len(items), f"adm:ex:pick:{template_id}"))
     rows.append(
         [InlineKeyboardButton(text="➕ Новое упражнение", callback_data=f"adm:ex:new:{template_id}")]
