@@ -42,6 +42,17 @@ async def _add_missing_columns(conn) -> None:
         )
     if "sex" not in cols:
         await conn.execute(text("ALTER TABLE users ADD COLUMN sex VARCHAR(16)"))
+    if "experience_as_of" not in cols:
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN experience_as_of DATETIME")
+        )
+        # Backfill: grow from account creation for users who already set stazh
+        await conn.execute(
+            text(
+                "UPDATE users SET experience_as_of = created_at "
+                "WHERE experience_months IS NOT NULL AND experience_as_of IS NULL"
+            )
+        )
 
     result = await conn.execute(text("PRAGMA table_info(sessions)"))
     cols = {row[1] for row in result}

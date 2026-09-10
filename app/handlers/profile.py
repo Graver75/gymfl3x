@@ -15,7 +15,7 @@ from app.services.metrics_log import log_body_weight
 from app.services.nn_client import get_nn_status
 from app.services.progression import PHASE_LABELS, phase_from_experience
 from app.services.strength_levels import profile_progress_lines
-from app.services.users import can_open_admin, get_or_create_user, reset_own_training_data
+from app.services.users import can_open_admin, effective_experience_months, get_or_create_user, reset_own_training_data, set_experience_months
 from app.states import ProfileSG
 
 router = Router(name="profile")
@@ -47,7 +47,8 @@ def _log_level_label(level: LogLevel | str | None) -> str:
 
 def _profile_text(user, *, nn_line: str | None = None) -> str:
     height = f"{user.height_cm:g} см" if user.height_cm else "—"
-    months = user.experience_months if user.experience_months is not None else "—"
+    exp = effective_experience_months(user)
+    months = exp if exp is not None else "—"
     if user.is_admin:
         role = "полный админ"
     elif user.is_program_admin:
@@ -335,7 +336,12 @@ async def cmd_experience(message: Message, state: FSMContext) -> None:
     if not user:
         return
     await state.set_state(ProfileSG.edit_experience)
-    await message.answer("Стаж в месяцах (фаза пересчитается, если не менял вручную часто):")
+    cur = effective_experience_months(user)
+    cur_s = f"{cur} мес" if cur is not None else "не указан"
+    await message.answer(
+        f"Текущий стаж: <b>{cur_s}</b> (растёт сам с месяцами).\n"
+        "Пришли актуальное число месяцев — отсчёт продолжится с сегодня:"
+    )
 
 
 @router.message(ProfileSG.edit_experience)
@@ -355,7 +361,7 @@ async def save_experience(message: Message, state: FSMContext) -> None:
             message.from_user.id,
             message.from_user.full_name or "Athlete",
         )
-        user.experience_months = months
+        set_experience_months(user, months)
         user.phase = phase_from_experience(months)
         await session.commit()
         phase = user.phase

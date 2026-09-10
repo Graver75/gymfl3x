@@ -18,6 +18,7 @@ from app.db.models import (
     WorkoutSession,
 )
 from app.services.reminders import get_template_for_weekday
+from app.services.users import effective_experience_months
 
 
 def _iso(dt: datetime | date | None) -> str | None:
@@ -158,7 +159,7 @@ async def build_athlete_snapshot(
             "log_level": user.log_level.value if getattr(user, "log_level", None) else "minimal",
             "body_weight": user.body_weight,
             "height_cm": user.height_cm,
-            "experience_months": user.experience_months,
+            "experience_months": effective_experience_months(user),
         },
         "body_weight_series": [
             {"weight": row.weight, "recorded_at": _iso(row.recorded_at)} for row in bw

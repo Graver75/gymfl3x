@@ -59,6 +59,10 @@ class User(Base):
     body_weight: Mapped[float | None] = mapped_column(Float, nullable=True)
     height_cm: Mapped[float | None] = mapped_column(Float, nullable=True)
     experience_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # When experience_months was last set; effective stazh grows from this date.
+    experience_as_of: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     phase: Mapped[TrainingPhase] = mapped_column(
         Enum(TrainingPhase),
         default=TrainingPhase.honeymoon,

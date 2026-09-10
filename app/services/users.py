@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from zoneinfo import ZoneInfo
 
 from app.config import get_settings
 from app.db.models import (
@@ -18,6 +21,47 @@ from app.services.progression import phase_from_experience
 
 def can_open_admin(user: User) -> bool:
     return bool(user.is_admin or getattr(user, "is_program_admin", False))
+
+
+def _now_tz() -> datetime:
+    settings = get_settings()
+    try:
+        return datetime.now(ZoneInfo(settings.timezone))
+    except Exception:
+        return datetime.now(timezone.utc)
+
+
+def _as_aware(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def calendar_months_elapsed(since: datetime, *, now: datetime | None = None) -> int:
+    """Full calendar months from since → now (never negative)."""
+    end = _as_aware(now or _now_tz())
+    start = _as_aware(since)
+    months = (end.year - start.year) * 12 + (end.month - start.month)
+    if end.day < start.day:
+        months -= 1
+    return max(0, months)
+
+
+def effective_experience_months(user: User, *, now: datetime | None = None) -> int | None:
+    """Stazh in months: stored base + months since experience_as_of (or created_at)."""
+    if user.experience_months is None:
+        return None
+    base = int(user.experience_months)
+    as_of = getattr(user, "experience_as_of", None) or user.created_at
+    if as_of is None:
+        return base
+    return base + calendar_months_elapsed(as_of, now=now)
+
+
+def set_experience_months(user: User, months: int, *, now: datetime | None = None) -> None:
+    """Record current total stazh; growth continues from this moment."""
+    user.experience_months = int(months)
+    user.experience_as_of = now or _now_tz()
 
 
 async def get_or_create_user(
@@ -71,7 +115,7 @@ async def apply_onboarding(
     user.short_code = short_code[:8].upper()
     user.body_weight = body_weight
     user.height_cm = height_cm
-    user.experience_months = experience_months
+    set_experience_months(user, experience_months)
     user.phase = phase_from_experience(experience_months)
     user.onboarding_done = True
     await log_body_weight(session, user.id, body_weight)
