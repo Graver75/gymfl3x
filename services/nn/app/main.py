@@ -9,6 +9,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from app.load import LoadTracker
 from app.prompts import DATA_SCHEMA_RU, SYSTEM_PROMPT, user_prompt_for
 
 logging.basicConfig(level=logging.INFO)
@@ -18,8 +19,10 @@ OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b-instruct")
 OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT_SEC", "180"))
 MAX_HISTORY = int(os.getenv("NN_MAX_HISTORY", "12"))
+MAX_CONCURRENT = int(os.getenv("NN_MAX_CONCURRENT", "1"))
 
-app = FastAPI(title="gymflex-nn", version="0.2.0")
+app = FastAPI(title="gymflex-nn", version="0.3.0")
+tracker = LoadTracker(max_concurrent=MAX_CONCURRENT)
 
 
 class HistoryMessage(BaseModel):
@@ -28,9 +31,10 @@ class HistoryMessage(BaseModel):
 
 
 class CoachRequest(BaseModel):
-    kind: Literal["session", "week", "month", "exercise"]
+    kind: Literal["session", "week", "month", "exercise", "live_set"]
     locale: str = "ru"
     user_id: int | None = None
+    user_label: str | None = None
     athlete: dict[str, Any] = Field(default_factory=dict)
     focus: dict[str, Any] = Field(default_factory=dict)
     history: list[HistoryMessage] = Field(default_factory=list)
@@ -41,6 +45,8 @@ class CoachResponse(BaseModel):
     model: str
     truncated: bool = False
     history_used: int = 0
+    job_id: str | None = None
+    queue_waited: bool = False
 
 
 async def _ollama_tags() -> list[str]:
@@ -82,7 +88,14 @@ async def health() -> dict[str, Any]:
                 "available": names[:20],
             },
         )
-    return {"ok": True, "ollama": "up", "model": OLLAMA_MODEL}
+    load = tracker.snapshot()
+    return {
+        "ok": True,
+        "ollama": "up",
+        "model": OLLAMA_MODEL,
+        "active_count": load["active_count"],
+        "queued_count": load["queued_count"],
+    }
 
 
 @app.get("/v1/meta")
@@ -93,7 +106,37 @@ async def meta() -> dict[str, Any]:
         "system_prompt": SYSTEM_PROMPT,
         "data_schema_ru": DATA_SCHEMA_RU,
         "max_history": MAX_HISTORY,
+        "max_concurrent": MAX_CONCURRENT,
     }
+
+
+@app.get("/v1/load")
+async def load() -> dict[str, Any]:
+    """Admin: active jobs + queue (multiple users can enqueue concurrently)."""
+    snap = tracker.snapshot()
+    return {
+        "ok": True,
+        "model": OLLAMA_MODEL,
+        **snap,
+    }
+
+
+async def _call_ollama(messages: list[dict[str, str]]) -> str:
+    body = {
+        "model": OLLAMA_MODEL,
+        "stream": False,
+        "options": {"temperature": 0.4, "num_predict": 512},
+        "messages": messages,
+    }
+    async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
+        r = await client.post(f"{OLLAMA_HOST}/api/chat", json=body)
+        r.raise_for_status()
+        data = r.json()
+    message = (data.get("message") or {}).get("content") or ""
+    text = str(message).strip()
+    if not text:
+        raise HTTPException(status_code=502, detail="empty_model_response")
+    return text
 
 
 @app.post("/v1/coach", response_model=CoachResponse)
@@ -105,37 +148,36 @@ async def coach(req: CoachRequest) -> CoachResponse:
         truncated = True
 
     user_content = user_prompt_for(req.kind, payload, req.focus, locale=req.locale)
-
-    # Prior turns only (system is always first; current user turn appended after)
     prior = [
         {"role": m.role, "content": m.content}
         for m in req.history[-MAX_HISTORY:]
         if m.role in {"user", "assistant"} and m.content.strip()
     ]
-
     messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(prior)
     messages.append({"role": "user", "content": user_content})
 
-    body = {
-        "model": OLLAMA_MODEL,
-        "stream": False,
-        "options": {"temperature": 0.4, "num_predict": 512},
-        "messages": messages,
-    }
-    try:
-        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
-            r = await client.post(f"{OLLAMA_HOST}/api/chat", json=body)
-            r.raise_for_status()
-            data = r.json()
-    except httpx.HTTPError as exc:
-        logger.exception("Ollama chat failed user_id=%s", req.user_id)
-        raise HTTPException(status_code=502, detail=f"ollama_error: {exc}") from exc
+    label = req.user_label
+    if not label and isinstance(req.athlete.get("user"), dict):
+        label = req.athlete["user"].get("code") or req.athlete["user"].get("short_code")
 
-    message = (data.get("message") or {}).get("content") or ""
-    text = str(message).strip()
-    if not text:
-        raise HTTPException(status_code=502, detail="empty_model_response")
+    # Snapshot before enqueue to know if we will wait
+    before = tracker.snapshot()
+    will_wait = before["active_count"] >= tracker.max_concurrent
+
+    async def _work() -> str:
+        try:
+            return await _call_ollama(messages)
+        except httpx.HTTPError as exc:
+            logger.exception("Ollama chat failed user_id=%s", req.user_id)
+            raise HTTPException(status_code=502, detail=f"ollama_error: {exc}") from exc
+
+    text = await tracker.run(
+        user_id=req.user_id,
+        user_label=label,
+        kind=req.kind,
+        work=_work,
+    )
     if len(text) > 3500:
         text = text[:3490] + "…"
         truncated = True
@@ -144,4 +186,5 @@ async def coach(req: CoachRequest) -> CoachResponse:
         model=OLLAMA_MODEL,
         truncated=truncated,
         history_used=len(prior),
+        queue_waited=will_wait,
     )

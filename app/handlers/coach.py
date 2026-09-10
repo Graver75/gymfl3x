@@ -5,11 +5,8 @@ import asyncio
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 
 from app import ui_copy as ui
-from app.db.models import SessionStatus, UserExerciseState, WorkoutSession
 from app.db.session import SessionLocal
 from app.filters import PrivateChat
 from app.keyboards import (
@@ -23,6 +20,7 @@ from app.services.coach_delivery import (
     format_prompt_info_text,
     run_coach_and_reply,
 )
+from app.services.history import list_user_logged_exercises
 from app.services.nn_client import NnStatus, get_nn_status, status_label
 from app.services.nn_dialog import clear_dialog, dialog_turn_count
 from app.services.users import get_or_create_user
@@ -92,16 +90,23 @@ async def coach_menu_msg(message: Message, state: FSMContext) -> None:
 async def coach_menu_cb(callback: CallbackQuery) -> None:
     if callback.message is None or callback.from_user is None:
         return
+    from aiogram.exceptions import TelegramBadRequest
+
     got = await _user_and_turns(
         callback.from_user.id, callback.from_user.full_name or "Athlete"
     )
     turns = got[1] if got else 0
     status = await get_nn_status(force=True)
-    await callback.message.edit_text(
-        await _coach_home_text(status, turns=turns),
-        reply_markup=coach_menu_kb(online=status == NnStatus.online, turns=turns),
-    )
-    await callback.answer(f"Статус: {status_label(status)}")
+    text = await _coach_home_text(status, turns=turns)
+    kb = coach_menu_kb(online=status == NnStatus.online, turns=turns)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb)
+        await callback.answer(f"Статус: {status_label(status)}")
+    except TelegramBadRequest as exc:
+        if "message is not modified" in str(exc):
+            await callback.answer(f"Статус: {status_label(status)} (без изменений)")
+        else:
+            raise
 
 
 @router.callback_query(F.data == "coach:prompt")
@@ -201,44 +206,9 @@ async def coach_month(callback: CallbackQuery) -> None:
 
 
 async def _exercise_items(user_id: int) -> list[tuple[int, str]]:
+    """Same pool as History: only exercises from finished workouts."""
     async with SessionLocal() as session:
-        name_by_id: dict[int, str] = {}
-        result = await session.execute(
-            select(WorkoutSession)
-            .where(
-                WorkoutSession.user_id == user_id,
-                WorkoutSession.status == SessionStatus.finished,
-            )
-            .options(selectinload(WorkoutSession.sets))
-            .order_by(WorkoutSession.session_date.desc(), WorkoutSession.id.desc())
-            .limit(40)
-        )
-        for ws in result.scalars().all():
-            for s in ws.sets:
-                if s.exercise_id and s.exercise_name:
-                    name_by_id.setdefault(s.exercise_id, s.exercise_name)
-
-        states = (
-            await session.execute(
-                select(UserExerciseState)
-                .where(UserExerciseState.user_id == user_id)
-                .order_by(UserExerciseState.updated_at.desc())
-            )
-        ).scalars().all()
-
-        items: list[tuple[int, str]] = []
-        seen: set[int] = set()
-        for st in states:
-            if st.exercise_id in seen:
-                continue
-            seen.add(st.exercise_id)
-            name = name_by_id.get(st.exercise_id, f"Упражнение #{st.exercise_id}")
-            items.append((st.exercise_id, name))
-        for ex_id, name in name_by_id.items():
-            if ex_id not in seen:
-                items.append((ex_id, name))
-                seen.add(ex_id)
-        return items
+        return await list_user_logged_exercises(session, user_id)
 
 
 @router.callback_query(F.data == "coach:exlist")
@@ -277,14 +247,19 @@ async def coach_ex_list(callback: CallbackQuery) -> None:
     items = await _exercise_items(user_id)
     if not items:
         await callback.message.edit_text(
-            "Пока нет упражнений в истории — сначала залогируй тренировку.",
+            f"{ui.BTN_COACH_EXERCISE}\n\n"
+            "Пока пусто — сюда попадают только упражнения из "
+            f"завершённых тренировок (как в «{ui.BTN_HISTORY}»).\n\n"
+            f"Дологируй подходы и нажми «{ui.BTN_FINISH_WORKOUT}». "
+            "Отмена и сброс не считаются.",
             reply_markup=coach_menu_kb(online=True),
         )
         await callback.answer()
         return
 
     await callback.message.edit_text(
-        f"{ui.BTN_COACH_EXERCISE}\nВыбери упражнение:",
+        f"{ui.BTN_COACH_EXERCISE}\n"
+        "Из завершённых тренировок — выбери упражнение:",
         reply_markup=coach_exercises_kb(items, page=page),
     )
     await callback.answer()

@@ -3,6 +3,17 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from html import escape as _html_escape
+
+
+def esc(text: object) -> str:
+    """Escape user/DB text for Telegram HTML parse mode."""
+    return _html_escape(str(text), quote=False)
+
+
+def b(text: object) -> str:
+    """Bold HTML; escapes content first."""
+    return f"<b>{esc(text)}</b>"
 
 # Reply menu (exact texts for F.text filters)
 BTN_WORKOUT = "🏋️ Тренировка"
@@ -23,6 +34,8 @@ BTN_FINISH_WORKOUT = "🏁 Закончить тренировку"
 BTN_MORE_SET = "➕ Ещё подход"
 BTN_EX_DONE = "✅ Готово по упражнению"
 BTN_UNDO_SET = "↩️ Отменить последний подход"
+BTN_RESET_WORKOUT = "🔄 Сбросить тренировку"
+BTN_RESET_WORKOUT_OK = "🗑️ Да, сбросить подходы"
 BTN_PROFILE_RESET = "🧹 Обнулить мои данные"
 BTN_PROFILE_RESET_OK = "🗑️ Да, обнулить всё"
 
@@ -78,11 +91,13 @@ BTN_ADM_ATHLETES_HIST = "📜 История атлетов"
 BTN_ADM_MISSING = "👀 Кто не залогировал"
 BTN_ADM_USERS = "👥 Пользователи"
 BTN_ADM_SNAPSHOT = "🧠 Снимок для NN"
+BTN_ADM_NN_LOAD = "📊 Нагрузка NN"
 
 # Coach / NN
 BTN_COACH_WEEK = "📊 Разбор недели"
 BTN_COACH_MONTH = "📅 Разбор месяца"
 BTN_COACH_EXERCISE = "💪 Совет по упражнению"
+BTN_COACH_SET = "🧠 Совет ИИ"
 BTN_COACH_PROMPT = "📜 Промпт и данные"
 BTN_COACH_CLEAR = "🧹 Очистить диалог"
 BTN_COACH_CLEAR_OK = "🗑️ Да, очистить диалог"

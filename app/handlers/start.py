@@ -34,19 +34,19 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
     if user.onboarding_done:
         await state.clear()
         text = (
-            f"{ui.ICO_WAVE} Привет, {user.display_name}!\n"
-            f"Код в сводке: {user.short_code}\n"
-            f"Фаза: {PHASE_LABELS[user.phase]}"
+            f"{ui.ICO_WAVE} Привет, {ui.b(user.display_name)}!\n"
+            f"Код в сводке: {ui.b(user.short_code)}\n"
+            f"Фаза: {ui.b(PHASE_LABELS[user.phase])}"
         )
         await message.answer(text, reply_markup=main_menu(show_admin=can_open_admin(user)))
         if payload == "workout":
-            await message.answer(f"Жми «{ui.BTN_WORKOUT}», чтобы начать лог.")
+            await message.answer(f"Жми «{ui.b(ui.BTN_WORKOUT)}», чтобы начать лог.")
         return
 
     await state.set_state(OnboardingSG.display_name)
     await message.answer(
-        f"{ui.ICO_WAVE} Привет! Это Gymflex — бот для логов в качалке.\n\n"
-        "Сначала онбординг. Как тебя называть?"
+        f"{ui.ICO_WAVE} Привет! Это {ui.b('Gymflex')} — бот для логов в качалке.\n\n"
+        f"{ui.b('Сначала онбординг.')} Как тебя называть?"
     )
 
 

@@ -55,15 +55,15 @@ def _profile_text(user, *, nn_line: str | None = None) -> str:
         role = "нет"
     log_level = getattr(user, "log_level", None) or LogLevel.minimal
     lines = [
-        f"{ui.BTN_PROFILE}",
-        f"Имя: {user.display_name}",
-        f"Код: {user.short_code}",
-        f"Вес: {user.body_weight:g} кг",
-        f"Рост: {height}",
-        f"Стаж: {months} мес",
-        f"Фаза: {PHASE_LABELS[user.phase]}",
-        f"Лог: {_log_level_label(log_level)}",
-        f"Админка: {role}",
+        f"{ui.b(ui.BTN_PROFILE)}",
+        f"Имя: {ui.b(user.display_name)}",
+        f"Код: {ui.b(user.short_code)}",
+        f"Вес: {ui.b(f'{user.body_weight:g} кг')}",
+        f"Рост: {ui.b(height)}",
+        f"Стаж: {ui.b(f'{months} мес')}",
+        f"Фаза: {ui.b(PHASE_LABELS[user.phase])}",
+        f"Лог: {ui.b(_log_level_label(log_level))}",
+        f"Админка: {ui.b(role)}",
     ]
     if nn_line:
         lines.append(nn_line)

@@ -72,7 +72,11 @@ def next_exercise_id(exercises: list, done_ids: set[int]) -> int | None:
 def session_map_text(template_name: str, exercises: list, done_ids: set[int]) -> str:
     total = len(exercises)
     done = sum(1 for ex in exercises if ex.id in done_ids)
-    lines = [f"{ui.ICO_MAP} {template_name}", f"Прогресс: {done}/{total}", ""]
+    lines = [
+        f"{ui.ICO_MAP} {ui.b(template_name)}",
+        f"Прогресс: {ui.b(f'{done}/{total}')}",
+        "",
+    ]
     for ex in exercises:
         if ex.id in done_ids:
             mark = ui.ICO_DONE
@@ -80,9 +84,8 @@ def session_map_text(template_name: str, exercises: list, done_ids: set[int]) ->
             mark = ui.ICO_NEXT
         else:
             mark = "▫️"
-        lines.append(
-            f"{mark} {ex.name} ({ex.target_sets}×{ex.target_reps_min}-{ex.target_reps_max})"
-        )
+        target = f"{ex.target_sets}×{ex.target_reps_min}-{ex.target_reps_max}"
+        lines.append(f"{mark} {ui.b(ex.name)} ({target})")
     return "\n".join(lines)
 
 

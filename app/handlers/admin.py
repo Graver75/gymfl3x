@@ -25,6 +25,7 @@ from app.db.session import SessionLocal
 from app.filters import PrivateChat
 from app.keyboards import (
     admin_menu_kb,
+    admin_nn_load_kb,
     admin_users_kb,
     archive_item_kb,
     archive_list_kb,
@@ -1220,3 +1221,105 @@ async def adm_snapshot(callback: CallbackQuery) -> None:
         reply_markup=admin_menu_kb(full=True),
     )
     await callback.answer()
+
+
+def _format_nn_load(data: dict | None) -> str:
+    if not data:
+        return (
+            f"{ui.BTN_ADM_NN_LOAD}\n"
+            "Нейросеть недоступна (офлайн / выключена).\n"
+            "Запросы пользователей не принимаются."
+        )
+    active = data.get("active") or []
+    queued = data.get("queued") or []
+    history = data.get("history") or []
+    status_ru = {
+        "ok": "ok",
+        "error": "ошибка",
+        "cancelled": "отменён",
+        "running": "идёт",
+        "queued": "очередь",
+    }
+    lines = [
+        f"{ui.BTN_ADM_NN_LOAD}",
+        f"Модель: {data.get('model', '?')}",
+        f"Параллельно макс.: {data.get('max_concurrent', '?')}",
+        f"Сейчас: {data.get('active_count', 0)} активных, "
+        f"{data.get('queued_count', 0)} в очереди",
+        f"Завершено всего: {data.get('completed_total', 0)}, "
+        f"ошибок: {data.get('failed_total', 0)}",
+        "",
+    ]
+    if active:
+        lines.append("Активные:")
+        for j in active:
+            who = j.get("user_label") or (f"id={j.get('user_id')}" if j.get("user_id") else "?")
+            lines.append(
+                f"• {who} — {j.get('kind')} · {status_ru.get(j.get('status'), j.get('status'))} "
+                f"· {j.get('running_sec', 0)}с"
+            )
+        lines.append("")
+    else:
+        lines.append("Активных запросов нет.\n")
+    if queued:
+        lines.append("Очередь:")
+        for j in queued:
+            who = j.get("user_label") or (f"id={j.get('user_id')}" if j.get("user_id") else "?")
+            lines.append(
+                f"• {who} — {j.get('kind')} · ждёт {j.get('waiting_sec', 0)}с"
+            )
+        lines.append("")
+    else:
+        lines.append("Очередь пуста.\n")
+
+    lines.append(f"История (последние {min(15, len(history))}/{data.get('history_limit', '?')}):")
+    if not history:
+        lines.append("• пока пусто")
+    else:
+        for h in history[:15]:
+            who = h.get("user_label") or (f"id={h.get('user_id')}" if h.get("user_id") else "?")
+            st = status_ru.get(h.get("status"), h.get("status"))
+            when = str(h.get("finished_at") or "")[-8:]  # HH:MM:SS from ISO if possible
+            if "T" in str(h.get("finished_at") or ""):
+                when = str(h["finished_at"]).split("T", 1)[1].replace("Z", "")[:8]
+            line = (
+                f"• {when} {who} — {h.get('kind')} · {st} · {h.get('duration_sec', 0)}с"
+            )
+            if h.get("status") == "error" and h.get("error"):
+                err = str(h["error"]).replace("\n", " ")[:60]
+                line += f"\n  ↳ {err}"
+            lines.append(line)
+
+    lines.append("")
+    lines.append(
+        "Несколько пользователей могут слать запросы одновременно — "
+        "лишние ждут в очереди, пока освободится слот."
+    )
+    text = "\n".join(lines)
+    if len(text) > 3900:
+        text = text[:3890] + "…"
+    return text
+
+
+@router.callback_query(F.data == "adm:nnload")
+async def adm_nn_load(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    user = await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin")
+    if not user:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    from aiogram.exceptions import TelegramBadRequest
+
+    from app.services.nn_client import fetch_nn_load
+
+    data = await fetch_nn_load()
+    text = _format_nn_load(data)
+    try:
+        await callback.message.edit_text(text, reply_markup=admin_nn_load_kb())
+        await callback.answer("Обновлено")
+    except TelegramBadRequest as exc:
+        if "message is not modified" in str(exc):
+            await callback.answer("Без изменений")
+        else:
+            raise

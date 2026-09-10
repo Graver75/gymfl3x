@@ -13,12 +13,14 @@ WINDOW_DAYS = {
     "week": 21,
     "month": 45,
     "exercise": 45,
+    "live_set": 45,
 }
 MAX_SESSIONS = {
     "session": 8,
     "week": 12,
     "month": 18,
     "exercise": 14,
+    "live_set": 14,
 }
 NOTE_MAX = 120
 
@@ -119,6 +121,7 @@ async def build_coach_context(
     focus_session_id: int | None = None,
     focus_exercise_id: int | None = None,
     focus_exercise_name: str | None = None,
+    live: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     days = WINDOW_DAYS.get(kind, 21)
     snap = await build_athlete_snapshot(session, user_id, days=days)
@@ -148,7 +151,7 @@ async def build_coach_context(
             _compact_session(ws, full_sets=(ws.get("id") == focus_session_id or ws in prev))
             for ws in extras + picked
         ]
-    elif kind == "exercise":
+    elif kind in {"exercise", "live_set"}:
         filtered = []
         for ws in sessions:
             sets = ws.get("sets") or []
@@ -173,7 +176,7 @@ async def build_coach_context(
     bw = list(snap.get("body_weight_series") or [])[-10:]
     notes = []
     for n in snap.get("notes_timeline") or []:
-        if kind == "exercise":
+        if kind in {"exercise", "live_set"}:
             if focus_exercise_id is not None and n.get("exercise_id") != focus_exercise_id:
                 if not (focus_exercise_name and n.get("exercise_name") == focus_exercise_name):
                     continue
@@ -189,7 +192,7 @@ async def build_coach_context(
 
     states = []
     for st in snap.get("exercise_state") or []:
-        if kind == "exercise":
+        if kind in {"exercise", "live_set"}:
             if focus_exercise_id is not None and st.get("exercise_id") != focus_exercise_id:
                 continue
         # Prefer stuck / notable
@@ -211,7 +214,15 @@ async def build_coach_context(
         states = sorted(states, key=lambda x: -(x.get("hard_streak") or 0))[:20]
 
     user = snap.get("user") or {}
-    return {
+    focus: dict[str, Any] = {
+        "session_id": focus_session_id,
+        "exercise_id": focus_exercise_id,
+        "exercise_name": focus_exercise_name,
+    }
+    if live:
+        focus.update(live)
+
+    out: dict[str, Any] = {
         "kind": kind,
         "window_days": days,
         "user": {
@@ -236,9 +247,8 @@ async def build_coach_context(
         "notes": notes,
         "exercise_state": states,
         "sessions": sessions_out,
-        "focus": {
-            "session_id": focus_session_id,
-            "exercise_id": focus_exercise_id,
-            "exercise_name": focus_exercise_name,
-        },
+        "focus": focus,
     }
+    if live:
+        out["live"] = live
+    return out

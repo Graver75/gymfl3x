@@ -216,7 +216,16 @@ async def hist_sessions(callback: CallbackQuery, state: FSMContext) -> None:
     target_id, label, viewing_other = await _target_context(state, viewer)
     async with SessionLocal() as session:
         sessions = await list_recent_sessions(session, target_id, limit=12)
-    title = f"Тренировки · {label}:" if viewing_other else "Последние тренировки:"
+    if viewing_other:
+        title = f"Тренировки · {label}:"
+    elif sessions:
+        title = "Последние завершённые тренировки:"
+    else:
+        title = (
+            "Последние завершённые тренировки:\n\n"
+            f"Пока пусто. Сюда попадает только «{ui.BTN_FINISH_WORKOUT}». "
+            "Отмена и сброс не считаются."
+        )
     await callback.message.edit_text(
         title,
         reply_markup=history_sessions_kb(sessions, back=_section_back(viewing_other)),
@@ -312,7 +321,15 @@ async def hist_delete_session_ok(callback: CallbackQuery, state: FSMContext) -> 
     if not ok:
         await callback.answer("Уже удалено", show_alert=True)
         return
-    title = f"Тренировки · {label}:" if viewing_other else "Последние тренировки:"
+    if viewing_other:
+        title = f"Тренировки · {label}:"
+    elif sessions:
+        title = "Последние завершённые тренировки:"
+    else:
+        title = (
+            "Последние завершённые тренировки:\n\n"
+            f"Пока пусто. Сюда попадает только «{ui.BTN_FINISH_WORKOUT}»."
+        )
     await callback.message.edit_text(
         f"Тренировка удалена.\n\n{title}",
         reply_markup=history_sessions_kb(sessions, back=_section_back(viewing_other)),
@@ -336,11 +353,16 @@ async def hist_exercises(callback: CallbackQuery, state: FSMContext) -> None:
     async with SessionLocal() as session:
         names = await list_user_exercise_names(session, target_id)
     await state.update_data(hist_names=names)
-    title = (
-        f"Упражнения · {label}:"
-        if viewing_other
-        else "Упражнения, которые ты логировал:"
-    )
+    if viewing_other:
+        title = f"Упражнения · {label}:"
+    elif names:
+        title = "Упражнения из завершённых тренировок:"
+    else:
+        title = (
+            "Упражнения из завершённых тренировок:\n\n"
+            f"Пока пусто. Нужна хотя бы одна «{ui.BTN_FINISH_WORKOUT}» — "
+            "тогда упражнения появятся и здесь, и в совете ИИ."
+        )
     await callback.message.edit_text(
         title,
         reply_markup=history_exercises_kb(

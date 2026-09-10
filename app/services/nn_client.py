@@ -118,6 +118,24 @@ async def fetch_nn_meta(*, force: bool = False) -> dict[str, Any]:
     return dict(_FALLBACK_META)
 
 
+async def fetch_nn_load() -> dict[str, Any] | None:
+    """Admin load snapshot. Never raises; None if unavailable."""
+    settings = get_settings()
+    if not settings.nn_enabled:
+        return None
+    url = f"{settings.nn_url.rstrip('/')}/v1/load"
+    try:
+        async with httpx.AsyncClient(timeout=settings.nn_health_timeout_sec) as client:
+            r = await client.get(url)
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            return data if isinstance(data, dict) else None
+    except Exception as exc:
+        logger.debug("NN load failed: %s", exc)
+        return None
+
+
 async def request_coach(
     *,
     kind: str,
@@ -125,6 +143,7 @@ async def request_coach(
     focus: dict[str, Any] | None = None,
     history: list[dict[str, str]] | None = None,
     user_id: int | None = None,
+    user_label: str | None = None,
     locale: str = "ru",
 ) -> str | None:
     """Call POST /v1/coach. Returns text or None. Never raises."""
@@ -140,6 +159,7 @@ async def request_coach(
         "kind": kind,
         "locale": locale,
         "user_id": user_id,
+        "user_label": user_label,
         "athlete": athlete,
         "focus": focus or {},
         "history": history or [],

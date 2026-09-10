@@ -37,12 +37,12 @@ async def _ensure_onboarded(message: Message) -> bool:
 
 
 def _format_template(template: WorkoutTemplate) -> str:
-    lines = [f"{ui.ICO_EXERCISE} {template.name} (#{template.hashtag})"]
+    lines = [f"{ui.ICO_EXERCISE} {ui.b(template.name)} (#{ui.esc(template.hashtag)})"]
     if not template.exercises:
         lines.append("  (упражнений пока нет)")
     for ex in template.exercises:
         lines.append(
-            f"  {ex.position + 1}. {ex.name} — "
+            f"  {ex.position + 1}. {ui.b(ex.name)} — "
             f"{ex.target_sets}×{ex.target_reps_min}-{ex.target_reps_max}, "
             f"шаг {ex.weight_step:g} кг"
         )
@@ -74,14 +74,14 @@ async def show_program(message: Message) -> None:
         return
 
     by_day = {s.weekday: s.template for s in schedule}
-    lines = [f"{ui.BTN_PROGRAM} График недели (read-only):"]
+    lines = [f"{ui.b(ui.BTN_PROGRAM)} График недели (read-only):"]
     for weekday in range(7):
         tpl = by_day.get(weekday)
-        label = tpl.name if tpl else "отдых"
-        lines.append(f"• {WEEKDAY_NAMES[weekday]}: {label}")
+        label = ui.b(tpl.name) if tpl else "отдых"
+        lines.append(f"• {ui.b(WEEKDAY_NAMES[weekday])}: {label}")
 
     lines.append("")
-    lines.append("Шаблоны:")
+    lines.append(f"{ui.b('Шаблоны:')}")
     for tpl in templates:
         lines.append("")
         lines.append(_format_template(tpl))
@@ -104,12 +104,14 @@ async def show_today(message: Message) -> None:
 
     if not template:
         await message.answer(
-            f"{ui.BTN_TODAY} {WEEKDAY_NAMES[weekday]} — по графику отдых / день не назначен."
+            f"{ui.b(ui.BTN_TODAY)} {ui.b(WEEKDAY_NAMES[weekday])} — "
+            "по графику отдых / день не назначен."
         )
         return
 
     await message.answer(
-        f"{ui.BTN_TODAY} {WEEKDAY_NAMES[weekday]} — {template.name}\n#{template.hashtag}\n\n"
+        f"{ui.b(ui.BTN_TODAY)} {ui.b(WEEKDAY_NAMES[weekday])} — {ui.b(template.name)}\n"
+        f"#{ui.esc(template.hashtag)}\n\n"
         + _format_template(template)
-        + f"\n\nЖми «{ui.BTN_WORKOUT}», чтобы логировать."
+        + f"\n\nЖми «{ui.b(ui.BTN_WORKOUT)}», чтобы логировать."
     )

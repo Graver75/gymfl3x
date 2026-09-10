@@ -59,6 +59,7 @@ async def run_coach_and_reply(
     focus_session_id: int | None = None,
     focus_exercise_id: int | None = None,
     focus_exercise_name: str | None = None,
+    live: dict[str, Any] | None = None,
     waiting_message: Message | None = None,
 ) -> None:
     """Fetch coach text and send/edit a Telegram message. Never raises."""
@@ -88,6 +89,7 @@ async def run_coach_and_reply(
                 focus_session_id=focus_session_id,
                 focus_exercise_id=focus_exercise_id,
                 focus_exercise_name=focus_exercise_name,
+                live=live,
             )
             if athlete.get("error"):
                 await waiting_message.edit_text("Не удалось собрать данные для разбора.")
@@ -99,6 +101,10 @@ async def run_coach_and_reply(
                 "exercise_id": focus_exercise_id,
                 "exercise_name": focus_exercise_name,
             }
+            if live:
+                focus.update(live)
+            user_meta = athlete.get("user") or {}
+            user_label = user_meta.get("code") or user_meta.get("short_code")
 
         raw = await request_coach(
             kind=kind,
@@ -106,6 +112,7 @@ async def run_coach_and_reply(
             focus=focus,
             history=history_for_api(history),
             user_id=user_id,
+            user_label=user_label,
         )
         if not raw:
             await waiting_message.edit_text(
@@ -131,7 +138,8 @@ async def run_coach_and_reply(
             await session.commit()
 
         safe = html.escape(raw)
-        body = f"{ui.ICO_NN} <b>ИИ-разбор</b>\n\n{safe}"
+        title = "Совет по подходу" if kind == "live_set" else "ИИ-разбор"
+        body = f"{ui.ICO_NN} <b>{title}</b>\n\n{safe}"
         if len(body) > 4000:
             body = body[:3990] + "…"
         await waiting_message.edit_text(body)

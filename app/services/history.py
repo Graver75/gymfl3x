@@ -88,6 +88,32 @@ async def get_user_session(
     return result.scalar_one_or_none()
 
 
+async def list_user_logged_exercises(
+    session: AsyncSession, user_id: int
+) -> list[tuple[int, str]]:
+    """Exercises from finished workouts only — same source as History."""
+    result = await session.execute(
+        select(SessionSet.exercise_id, SessionSet.exercise_name)
+        .join(WorkoutSession, SessionSet.session_id == WorkoutSession.id)
+        .where(
+            WorkoutSession.user_id == user_id,
+            WorkoutSession.status == SessionStatus.finished,
+            SessionSet.exercise_id.is_not(None),
+            SessionSet.exercise_name.is_not(None),
+        )
+        .order_by(WorkoutSession.session_date.desc(), WorkoutSession.id.desc())
+    )
+    items: list[tuple[int, str]] = []
+    seen: set[int] = set()
+    for ex_id, name in result.all():
+        if not ex_id or not name or ex_id in seen:
+            continue
+        seen.add(ex_id)
+        items.append((int(ex_id), str(name)))
+    items.sort(key=lambda pair: pair[1].lower())
+    return items
+
+
 async def list_user_exercise_names(session: AsyncSession, user_id: int) -> list[str]:
     result = await session.execute(
         select(SessionSet.exercise_name)

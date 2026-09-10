@@ -165,6 +165,7 @@ def workout_exercise_kb(
     *,
     weight_hints: dict[int, float] | None = None,
     next_id: int | None = None,
+    can_reset: bool = False,
 ) -> InlineKeyboardMarkup:
     rows = []
     for ex in exercises:
@@ -187,8 +188,25 @@ def workout_exercise_kb(
             ]
         )
     rows.append([InlineKeyboardButton(text=ui.BTN_FINISH_WORKOUT, callback_data="wo:finish")])
+    if can_reset:
+        rows.append(
+            [InlineKeyboardButton(text=ui.BTN_RESET_WORKOUT, callback_data="wo:reset")]
+        )
     rows.append([InlineKeyboardButton(text=ui.BTN_CANCEL, callback_data="wo:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def workout_reset_confirm_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=ui.BTN_RESET_WORKOUT_OK, callback_data="wo:resetok"
+                )
+            ],
+            [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="wo:map")],
+        ]
+    )
 
 
 def weight_kb(
@@ -237,6 +255,7 @@ def weight_kb(
     for i in range(0, len(presets), 3):
         buttons.append(presets[i : i + 3])
     buttons.append([InlineKeyboardButton(text=ui.BTN_ENTER_WEIGHT, callback_data="wo:w:custom")])
+    buttons.append([InlineKeyboardButton(text=ui.BTN_COACH_SET, callback_data="wo:coach")])
     buttons.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="wo:back")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -263,6 +282,7 @@ def reps_kb(
     rows = [row[i : i + 4] for i in range(0, len(row), 4)]
     rows.append([InlineKeyboardButton(text=ui.BTN_REP_FAIL, callback_data="wo:r:0")])
     rows.append([InlineKeyboardButton(text=ui.BTN_ENTER_REPS, callback_data="wo:r:custom")])
+    rows.append([InlineKeyboardButton(text=ui.BTN_COACH_SET, callback_data="wo:coach")])
     rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="wo:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -286,6 +306,7 @@ def after_set_kb(target_sets: int, done_sets: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=more, callback_data="wo:more")],
             [InlineKeyboardButton(text=ui.BTN_EX_DONE, callback_data="wo:exdone")],
             [InlineKeyboardButton(text=ui.BTN_UNDO_SET, callback_data="wo:undo")],
+            [InlineKeyboardButton(text=ui.BTN_COACH_SET, callback_data="wo:coach")],
         ]
     )
 
@@ -326,9 +347,19 @@ def admin_menu_kb(*, full: bool = True) -> InlineKeyboardMarkup:
                 [InlineKeyboardButton(text=ui.BTN_ADM_MISSING, callback_data="adm:missing")],
                 [InlineKeyboardButton(text=ui.BTN_ADM_USERS, callback_data="adm:users")],
                 [InlineKeyboardButton(text=ui.BTN_ADM_SNAPSHOT, callback_data="adm:snapshot")],
+                [InlineKeyboardButton(text=ui.BTN_ADM_NN_LOAD, callback_data="adm:nnload")],
             ]
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_nn_load_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data="adm:nnload")],
+            [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:home")],
+        ]
+    )
 
 
 def current_exercises_kb(items: list[tuple], *, page: int = 0) -> InlineKeyboardMarkup:

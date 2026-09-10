@@ -8,13 +8,14 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
 from app.db.models import (
     Difficulty,
     ExerciseArchive,
+    ExerciseNoteLog,
     LogLevel,
     SessionSet,
     SessionStatus,
@@ -37,6 +38,7 @@ from app.keyboards import (
     workout_archive_kb,
     workout_exercise_kb,
     workout_mode_kb,
+    workout_reset_confirm_kb,
     workout_templates_kb,
 )
 from app.services.archive import list_archive, upsert_archive
@@ -146,7 +148,13 @@ async def _show_session_map(
     text = session_map_text(template.name, template.exercises, done)
     if prefix:
         text = f"{prefix}\n\n{text}"
-    kb = workout_exercise_kb(template.exercises, done, weight_hints=hints, next_id=nxt)
+    kb = workout_exercise_kb(
+        template.exercises,
+        done,
+        weight_hints=hints,
+        next_id=nxt,
+        can_reset=bool(done),
+    )
     await state.set_state(WorkoutSG.pick_exercise)
     await state.update_data(session_id=ws.id, template_id=template.id)
     if edit:
@@ -693,6 +701,138 @@ async def note_save(message: Message, state: FSMContext) -> None:
     await message.answer(
         f"Лог: {format_logged_parts(logged)}{note_line}\nКак в целом прошло упражнение?",
         reply_markup=difficulty_kb(),
+    )
+
+
+def _live_set_rows(parts: list[dict]) -> list[dict]:
+    rows: list[dict] = []
+    for p in parts:
+        rows.append(
+            {
+                "n": int(p.get("set_number") or 0),
+                "d": int(p.get("drop_index") or 0),
+                "kg": p.get("weight"),
+                "reps": p.get("reps"),
+                "rpe": p.get("rpe"),
+            }
+        )
+    return rows
+
+
+@router.callback_query(F.data == "wo:coach")
+async def workout_live_coach(callback: CallbackQuery, state: FSMContext) -> None:
+    """Mid-set AI tip: technique + summary; keeps the workout keyboard intact."""
+    if callback.from_user is None or callback.message is None:
+        return
+
+    current = await state.get_state()
+    if current not in {
+        WorkoutSG.weight.state,
+        WorkoutSG.reps.state,
+        WorkoutSG.after_set.state,
+    }:
+        await callback.answer(
+            "Сессия тренировки сброшена (рестарт бота). Снова открой упражнение через «Тренировка».",
+            show_alert=True,
+        )
+        return
+
+    status = await get_nn_status(force=True)
+    if status != NnStatus.online:
+        await callback.answer("Нейросеть недоступна", show_alert=True)
+        return
+
+    data = await state.get_data()
+    screen = "weight"
+    if current == WorkoutSG.reps.state:
+        screen = "reps"
+    elif current == WorkoutSG.after_set.state:
+        screen = "after_set"
+
+    async with SessionLocal() as session:
+        user = await get_or_create_user(
+            session,
+            callback.from_user.id,
+            callback.from_user.full_name or "Athlete",
+        )
+        exercise = await resolve_exercise(session, data)
+        if not exercise:
+            await callback.answer(
+                "Нет данных упражнения — открой его заново с карты тренировки.",
+                show_alert=True,
+            )
+            return
+
+        name = exercise.name
+        ex_id = getattr(exercise, "id", None) or data.get("exercise_id")
+        target = (
+            f"{exercise.target_sets}×{exercise.target_reps_min}-{exercise.target_reps_max}"
+        )
+        db_parts: list[dict] = []
+        sid = data.get("session_id")
+        if sid and ex_id is not None:
+            result = await session.execute(
+                select(WorkoutSession)
+                .where(WorkoutSession.id == int(sid), WorkoutSession.user_id == user.id)
+                .options(selectinload(WorkoutSession.sets))
+            )
+            ws = result.scalar_one_or_none()
+            if ws:
+                for s in sorted(
+                    ws.sets, key=lambda row: (row.set_number or 0, row.drop_index or 0, row.id)
+                ):
+                    if s.exercise_id == ex_id or (
+                        s.exercise_name and s.exercise_name == name
+                    ):
+                        db_parts.append(
+                            {
+                                "set_number": s.set_number,
+                                "drop_index": s.drop_index,
+                                "weight": s.weight,
+                                "reps": s.reps,
+                                "rpe": s.rpe_1_10,
+                            }
+                        )
+        user_id = user.id
+
+    logged = list(data.get("logged") or [])
+    # Prefer in-progress FSM sets; fall back to already saved session sets
+    series = logged if logged else db_parts
+    live = {
+        "exercise_id": ex_id,
+        "exercise_name": name,
+        "session_id": data.get("session_id"),
+        "screen": screen,
+        "current_set": int(data.get("current_set") or 1),
+        "sets_done": _unique_set_count(series),
+        "drop_index": int(data.get("drop_index") or 0),
+        "target": target,
+        "draft_weight": data.get("draft_weight"),
+        "draft_reps": data.get("draft_reps"),
+        "logged_sets": _live_set_rows(series),
+        "saved_sets_in_session": _live_set_rows(db_parts) if logged and db_parts else None,
+    }
+    if live["saved_sets_in_session"] is None:
+        live.pop("saved_sets_in_session")
+
+    await callback.answer()
+    waiting = await callback.message.answer(
+        f"{ui.ICO_NN} Совет по «{ui.esc(name)}», подход "
+        f"{ui.b(str(live['current_set']))}… Это может занять до пары минут.\n"
+        "Можно продолжать лог — ответ придёт отдельным сообщением."
+    )
+    asyncio.create_task(
+        run_coach_and_reply(
+            bot=callback.bot,
+            chat_id=callback.message.chat.id,
+            user_id=user_id,
+            kind="live_set",
+            focus_session_id=data.get("session_id"),
+            focus_exercise_id=ex_id if isinstance(ex_id, int) else None,
+            focus_exercise_name=name,
+            live=live,
+            waiting_message=waiting,
+        )
     )
 
 
@@ -1415,6 +1555,120 @@ async def _finalize_finished_session(callback: CallbackQuery, state: FSMContext)
             )
     except Exception:
         pass
+
+
+@router.callback_query(F.data == "wo:map")
+async def workout_back_to_map(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None or callback.from_user is None:
+        return
+    data = await state.get_data()
+    session_id = data.get("session_id")
+    template_id = data.get("template_id")
+    if not session_id or not template_id:
+        await callback.answer("Нет активной тренировки", show_alert=True)
+        return
+    async with SessionLocal() as session:
+        user = await get_or_create_user(
+            session, callback.from_user.id, callback.from_user.full_name or "Athlete"
+        )
+        ws = await session.get(WorkoutSession, session_id)
+        template = await load_template_with_exercises(session, template_id)
+        if not ws or not template or ws.status != SessionStatus.active:
+            await callback.answer("Сессия не найдена", show_alert=True)
+            return
+        await _show_session_map(
+            callback.message,
+            state,
+            user_id=user.id,
+            template=template,
+            ws=ws,
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "wo:reset")
+async def reset_workout_ask(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None:
+        return
+    data = await state.get_data()
+    if not data.get("session_id"):
+        await callback.answer("Нет активной тренировки", show_alert=True)
+        return
+    await callback.message.edit_text(
+        f"{ui.BTN_RESET_WORKOUT}\n\n"
+        "Удалятся все подходы этой сессии. Прогресс станет 0.\n"
+        "Шаблон и сама сессия останутся — можно логировать заново.\n"
+        "Автовеса из уже сохранённых упражнений не откатываются.",
+        reply_markup=workout_reset_confirm_kb(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "wo:resetok")
+async def reset_workout_ok(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None or callback.from_user is None:
+        return
+    data = await state.get_data()
+    session_id = data.get("session_id")
+    template_id = data.get("template_id")
+    if not session_id:
+        await callback.answer("Нет активной тренировки", show_alert=True)
+        return
+
+    async with SessionLocal() as session:
+        user = await get_or_create_user(
+            session, callback.from_user.id, callback.from_user.full_name or "Athlete"
+        )
+        ws = await session.get(WorkoutSession, session_id)
+        if not ws or ws.user_id != user.id or ws.status != SessionStatus.active:
+            await callback.answer("Сессия не найдена", show_alert=True)
+            return
+        sets_del = await session.execute(
+            delete(SessionSet).where(SessionSet.session_id == session_id)
+        )
+        notes_del = await session.execute(
+            delete(ExerciseNoteLog).where(ExerciseNoteLog.session_id == session_id)
+        )
+        await session.commit()
+        deleted_sets = int(sets_del.rowcount or 0)
+        deleted_notes = int(notes_del.rowcount or 0)
+
+        # Clear in-progress exercise draft in FSM, keep session
+        await state.update_data(
+            exercise_id=None,
+            exercise_name=None,
+            draft_weight=None,
+            draft_reps=None,
+            logged=[],
+            current_set=1,
+            drop_index=0,
+        )
+
+        if template_id:
+            template = await load_template_with_exercises(session, template_id)
+            if template:
+                await _show_session_map(
+                    callback.message,
+                    state,
+                    user_id=user.id,
+                    template=template,
+                    ws=ws,
+                    prefix=(
+                        f"Тренировка сброшена "
+                        f"(подходов: {deleted_sets}, заметок: {deleted_notes})."
+                    ),
+                )
+                await callback.answer("Сброшено")
+                return
+
+        items = await list_archive(session)
+        await state.set_state(WorkoutSG.pick_archive)
+        await callback.message.edit_text(
+            f"Тренировка сброшена (подходов: {deleted_sets}).\n"
+            "Добавь упражнение из архива или закончи.",
+            reply_markup=workout_archive_kb(items),
+        )
+    await callback.answer("Сброшено")
 
 
 @router.callback_query(F.data == "wo:cancel")
