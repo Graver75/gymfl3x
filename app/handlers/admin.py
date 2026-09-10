@@ -1116,11 +1116,13 @@ async def adm_chats(callback: CallbackQuery) -> None:
     text = format_chats_report(probes)
     if len(text) > 4000:
         text = text[:3990] + "…"
+    from aiogram.exceptions import TelegramBadRequest
+
     try:
         await callback.message.edit_text(text, reply_markup=admin_chats_kb())
-    except Exception:
-        # Telegram: message is not modified
-        pass
+    except TelegramBadRequest as exc:
+        if "message is not modified" not in str(exc):
+            raise
     await callback.answer()
 
 
