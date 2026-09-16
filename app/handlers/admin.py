@@ -61,6 +61,7 @@ from app.services.strength_levels import (
     sync_standards_from_catalog,
     thresholds_for,
 )
+from app.services.telegram_safe import safe_edit_text
 from app.services.users import get_or_create_user
 from app.states import AdminSG
 
@@ -232,7 +233,8 @@ async def adm_home_cb(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("Нет доступа", show_alert=True)
         return
     await state.clear()
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         f"{ui.ICO_ADMIN} Админка Gymflex:",
         reply_markup=admin_menu_kb(full=user.is_admin),
     )

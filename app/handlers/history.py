@@ -34,8 +34,9 @@ from app.services.history import (
     session_notes,
 )
 from app.db.models import SessionSet
-from app.states import EditSessionSG
+from app.services.telegram_safe import safe_callback_answer, safe_edit_text
 from app.services.users import get_or_create_user
+from app.states import EditSessionSG
 
 router = Router(name="history")
 router.message.filter(PrivateChat())
@@ -226,11 +227,12 @@ async def hist_sessions(callback: CallbackQuery, state: FSMContext) -> None:
             f"Пока пусто. Сюда попадает только «{ui.BTN_FINISH_WORKOUT}». "
             "Отмена и сброс не считаются."
         )
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         title,
         reply_markup=history_sessions_kb(sessions, back=_section_back(viewing_other)),
     )
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @router.callback_query(F.data.startswith("hist:s:"))
