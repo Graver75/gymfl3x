@@ -2370,24 +2370,86 @@ async def adm_nn_prompts(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("adm:nnprompt:"))
-async def adm_nn_prompt_view(callback: CallbackQuery) -> None:
+def _nn_prompt_catalog_idx(data: str, *, expect_data: bool = False) -> int | None:
+    """Parse adm:nnprompt:{idx} or adm:nnprompt:data:{idx}."""
+    parts = data.split(":")
+    if expect_data:
+        if len(parts) != 4 or parts[2] != "data":
+            return None
+        raw = parts[3]
+    else:
+        if len(parts) != 3 or parts[2] == "data":
+            return None
+        raw = parts[2]
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+@router.callback_query(F.data.startswith("adm:nnprompt:data:"))
+async def adm_nn_prompt_data(callback: CallbackQuery) -> None:
     if callback.from_user is None or callback.message is None or callback.data is None:
         return
     user = await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin")
     if not user:
         await callback.answer("Нет доступа", show_alert=True)
         return
-    try:
-        idx = int(callback.data.split(":")[-1])
-    except ValueError:
+    idx = _nn_prompt_catalog_idx(callback.data, expect_data=True)
+    if idx is None:
         await callback.answer("?")
         return
-    import html as html_mod
+    from app.keyboards import admin_nn_prompt_data_kb
+    from app.services.coach_prompts import (
+        catalog_kind,
+        list_prompt_catalog,
+        payload_full_doc_for,
+    )
 
-    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    catalog = list_prompt_catalog()
+    if idx < 0 or idx >= len(catalog):
+        await callback.answer("Нет такого", show_alert=True)
+        return
+    key, title, _seed = catalog[idx]
+    kind = catalog_kind(key)
+    doc = payload_full_doc_for(kind)
+    header = (
+        f"{ui.BTN_ADM_NN_PROMPTS}: {ui.esc(title)}\n"
+        f"<code>{ui.esc(key)}</code>\n"
+        f"{ui.b('Полные данные в промпт')}\n\n"
+    )
+    text = ui.pre_chunk(header, doc, max_total=4090)
+    await safe_edit_text(
+        callback.message,
+        text,
+        reply_markup=admin_nn_prompt_data_kb(idx),
+    )
+    await callback.answer()
 
-    from app.services.coach_prompts import list_prompt_catalog, resolve_system_prompt, resolve_task_prompt
+
+@router.callback_query(F.data.startswith("adm:nnprompt:"))
+async def adm_nn_prompt_view(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    # Skip adm:nnprompt:data:* (handled above) — keep filter for registration order safety
+    if callback.data.startswith("adm:nnprompt:data:"):
+        return
+    user = await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin")
+    if not user:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    idx = _nn_prompt_catalog_idx(callback.data)
+    if idx is None:
+        await callback.answer("?")
+        return
+    from app.keyboards import admin_nn_prompt_view_kb
+    from app.services.coach_prompts import (
+        catalog_kind,
+        list_prompt_catalog,
+        payload_brief_for,
+        resolve_system_prompt,
+        resolve_task_prompt,
+    )
 
     catalog = list_prompt_catalog()
     if idx < 0 or idx >= len(catalog):
@@ -2402,25 +2464,19 @@ async def adm_nn_prompt_view(callback: CallbackQuery) -> None:
             body = await resolve_task_prompt(kind, session)
         else:
             body = seed
-    text = (
-        f"{ui.BTN_ADM_NN_PROMPTS}: {html_mod.escape(title)}\n"
-        f"<code>{html_mod.escape(key)}</code>\n\n"
-        f"<pre>{html_mod.escape(body[:3500])}</pre>"
+    kind = catalog_kind(key)
+    brief = payload_brief_for(kind)
+    header = (
+        f"{ui.BTN_ADM_NN_PROMPTS}: {ui.esc(title)}\n"
+        f"<code>{ui.esc(key)}</code>\n\n"
+        f"{ui.b('📦 Данные')}\n{ui.esc(brief)}\n\n"
+        f"{ui.b('Промпт')}\n"
     )
-    if len(text) > 4000:
-        text = text[:3990] + "…"
+    text = ui.pre_chunk(header, body, max_total=4090)
     await safe_edit_text(
         callback.message,
         text,
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text=ui.BTN_BACK, callback_data="adm:nnprompts"
-                    )
-                ]
-            ]
-        ),
+        reply_markup=admin_nn_prompt_view_kb(idx),
     )
     await callback.answer()
 

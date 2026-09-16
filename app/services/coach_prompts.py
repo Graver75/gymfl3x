@@ -207,6 +207,169 @@ def list_prompt_catalog() -> list[tuple[str, str, str]]:
     return items
 
 
+def catalog_kind(key: str) -> str | None:
+    """Map catalog setting key → coach kind, or None for system."""
+    if key == SETTING_SYSTEM:
+        return None
+    if key.startswith(SETTING_PREFIX):
+        return key[len(SETTING_PREFIX) :]
+    return None
+
+
+# Brief + full docs: what JSON is injected with each prompt kind
+_KIND_PAYLOAD_BRIEF: dict[str, str] = {
+    "__system__": (
+        "В system уходит только текст персоны Бендера. "
+        "JSON атлета — в user-сообщении вместе с задачей и DATA_SCHEMA_RU."
+    ),
+    "session": (
+        "Один атлет · окно ~14 дн · до 8 сессий. "
+        "user (фаза/вес/рост/пол/возраст/стаж/код), sessions (focus + прошлые, "
+        "полные сеты на focus), exercise_state, notes, adherence, aggregates, "
+        "BW-серия, focus.session_id. Без live / athletes / target_exercises."
+    ),
+    "session_group": (
+        "Общий чат дня: fact_recap + athletes[] (код/имя + урезанный session-контекст "
+        "каждого). Окно ~14 дн. Без week schedule / target_exercises."
+    ),
+    "week": (
+        "Один атлет · окно до 365 дн · до 80 сессий (свежие с полным by_ex, "
+        "старые компакт). user+height, adherence, aggregates, BW(~52), notes, "
+        "все exercise_state с весами, schedule пн–вс. Без live / athletes."
+    ),
+    "week_group": (
+        "athletes[] — у каждого тот же week-контекст (год истории). "
+        "Фокус вердикта — текущая неделя. Без target_exercises."
+    ),
+    "week_plan": (
+        "Как week (год) + target_exercises[] (id/name/machine/targets) "
+        "и week_start. Ответ — JSON плана, не текст в чат."
+    ),
+    "month": (
+        "Один атлет · ~45 дн · до 18 сессий. user, sessions (by_ex), "
+        "exercise_state (в основном hard_streak/note), notes, adherence, "
+        "aggregates, BW. Без live / schedule / athletes."
+    ),
+    "exercise": (
+        "Один атлет · ~45 дн · сессии только с этим упражнением (полные сеты). "
+        "focus.exercise_id/name + machine_name, exercise_state этого движения, "
+        "notes. Без live."
+    ),
+    "live_set": (
+        "Один атлет · ~45 дн по упражнению + athlete.live: machine_name, "
+        "current_set, draft kg/reps, logged_sets, week_plan (advice+sets) "
+        "для анти-дубля. Без adherence/aggregates/BW в payload."
+    ),
+}
+
+_KIND_PAYLOAD_FULL: dict[str, str] = {
+    "__system__": (
+        "System prompt (Бендер)\n"
+        "─────────────────────\n"
+        "Не содержит JSON атлета.\n\n"
+        "User-сообщение (собирается в nn_client):\n"
+        "· Язык ответа\n"
+        "· Тип разбора (kind)\n"
+        "· Задача = prompt_task_<kind>\n"
+        "· Данные (JSON, один раз) = athlete payload\n\n"
+        "Общая схема полей (DATA_SCHEMA_RU):\n"
+        f"{DATA_SCHEMA_RU}"
+    ),
+    "session": (
+        "kind=session\n"
+        "window_days=14 · max_sessions=8\n\n"
+        "Корни JSON:\n"
+        "· user: phase, log_level, bw, height_cm, exp_m, code, sex, age\n"
+        "· focus: session_id (+ machine если есть)\n"
+        "· sessions[]: id, date, tpl, dur, checkin, vol, sets_n, parts_n;\n"
+        "  focus/недавние same-tpl — полные sets[] (ex,n,d,reps,kg,diff,rpe,m);\n"
+        "  остальные — компакт\n"
+        "· exercise_state[]: ex_id, ex, m, ww, sw, last_reps/sets, diff, hard_streak, note\n"
+        "· notes[]: ex, text, cleared, at\n"
+        "· adherence, aggregates (sessions_n, total_vol, avg_rpe, bw_delta)\n"
+        "· body_weight_series[]\n\n"
+        "Нет: live, athletes, target_exercises, schedule, rest_sec, уровни силы"
+    ),
+    "session_group": (
+        "kind=session_group\n"
+        "Обёртка: date, template, hashtag, fact_recap, athletes[]\n\n"
+        "Каждый athlete:\n"
+        "· code, name\n"
+        "· user / sessions / exercise_state / focus — как session\n"
+        "  (focus = сегодняшняя сессия если была)\n\n"
+        "Нет: week schedule, target_exercises, live"
+    ),
+    "week": (
+        "kind=week\n"
+        "window_days=365 · max_sessions=80 · recent_full≈16\n\n"
+        "Корни:\n"
+        "· user (+ height_cm)\n"
+        "· schedule[]: wd, date, tpl, tpl_id (пн–вс)\n"
+        "· sessions[]:\n"
+        "  recent — by_ex с полными kg/reps, sets_n (рабочие), parts_n (с дропами),\n"
+        "  checkin, machine m, diff, rpe_avg\n"
+        "  older — date, tpl, vol, sets_n, parts_n, top[2] по объёму\n"
+        "· exercise_state — все с ww/sw/streak/note (до ~60)\n"
+        "· notes (до ~40), adherence, aggregates, body_weight_series (~52 точек)\n\n"
+        "Нет: live, athletes, target_exercises"
+    ),
+    "week_group": (
+        "kind=week_group\n"
+        "athletes[] — у каждого полный week-payload (год истории).\n"
+        "Фокус текста — текущая неделя; год для тренда.\n"
+        "sets_n ≠ parts_n.\n\n"
+        "Нет: target_exercises, live"
+    ),
+    "week_plan": (
+        "kind=week_plan\n"
+        "База как week (365д) +\n"
+        "· week_start\n"
+        "· target_exercises[]: exercise_id, name, machine_name,\n"
+        "  target_sets, target_reps_min/max, weight_step\n"
+        "· chunk (если дробление)\n\n"
+        "Ответ модели: JSON {exercises:[{exercise_id, advice, sets[{n,kg,reps,rpe}]}]}"
+    ),
+    "month": (
+        "kind=month\n"
+        "window_days=45 · max_sessions=18\n\n"
+        "user, sessions (by_ex), notes, adherence, aggregates, BW,\n"
+        "exercise_state в основном с hard_streak или note.\n\n"
+        "Нет: live, schedule, athletes, target_exercises"
+    ),
+    "exercise": (
+        "kind=exercise\n"
+        "window_days=45\n\n"
+        "· focus.exercise_id / exercise_name / machine_name\n"
+        "· sessions — только с этим упражнением, полные sets[]\n"
+        "· exercise_state / notes — только это движение\n"
+        "· user, adherence, aggregates, BW\n\n"
+        "Нет: live, athletes, target_exercises"
+    ),
+    "live_set": (
+        "kind=live_set\n"
+        "window_days=45 (история упражнения) +\n\n"
+        "athlete.live:\n"
+        "· exercise_id/name, session_id, screen, current_set, sets_done, drop_index\n"
+        "· target, draft_weight/reps\n"
+        "· logged_sets[], saved_sets_in_session?\n"
+        "· machine_name\n"
+        "· week_plan? {week_start, advice, sets[]} — уже на карточке, не дублировать\n\n"
+        "focus + machine_name\n"
+        "Нет в live_set: adherence, aggregates, body_weight_series"
+    ),
+}
+
+
+def payload_brief_for(kind: str | None) -> str:
+    key = "__system__" if kind is None else kind
+    return _KIND_PAYLOAD_BRIEF.get(key, "См. DATA_SCHEMA_RU.")
+
+
+def payload_full_doc_for(kind: str | None) -> str:
+    key = "__system__" if kind is None else kind
+    return _KIND_PAYLOAD_FULL.get(key, DATA_SCHEMA_RU)
+
+
 PROMPT_SEED_FLAGS: dict[str, tuple[str, str]] = {
     # flag_key -> (setting_key, task kind | "__system__")
     "week_group_prompt_v2": (f"{SETTING_PREFIX}week_group", "week_group"),

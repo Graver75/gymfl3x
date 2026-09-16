@@ -807,6 +807,32 @@ def admin_nn_prompts_kb(items: list[tuple[str, str]]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def admin_nn_prompt_view_kb(idx: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=ui.BTN_ADM_NN_PROMPT_DATA,
+                    callback_data=f"adm:nnprompt:data:{idx}",
+                )
+            ],
+            [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:nnprompts")],
+        ]
+    )
+
+
+def admin_nn_prompt_data_kb(idx: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=ui.BTN_BACK, callback_data=f"adm:nnprompt:{idx}"
+                )
+            ]
+        ]
+    )
+
+
 def admin_nn_logs_kb(
     items: list[dict],
     *,
