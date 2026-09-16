@@ -31,8 +31,9 @@ DATA_SCHEMA_RU = """Компактный JSON (без дублей):
 • user — фаза прогрессии, лог, вес, стаж, возраст, код (без уровней силы)
 • adherence / aggregates / body_weight_series — week/month/session (в live_set обычно нет)
 • notes, exercise_state (поле m = тренажёр), sessions (в сетах m = тренажёр)
-• live — только live_set (machine_name если задан)
+• live — только live_set (machine_name; week_plan текущего упражнения если есть)
 • focus — ids цели + machine_name
+• target_exercises — только week_plan: упражнения на целевую неделю
 • athletes — только session_group / week_group: несколько атлетов с кодами"""
 
 DEFAULT_TASKS: dict[str, str] = {
@@ -65,12 +66,27 @@ DEFAULT_TASKS: dict[str, str] = {
     ),
     "week_group": (
         "Недельная сводка группы. JSON: athletes[] с недельными агрегатами и кодами.\n"
-        "Стиль Бендера. Структура:\n"
-        "1) Вердикт недели для команды.\n"
-        "2) По каждому коду: оценка 1–10 + прогресс/регресс одной фразой.\n"
-        "3) Жёстко-шуточное сравнение атлетов (рейтинг недели).\n"
-        "4) Прогноз на следующую неделю.\n"
-        "Без уровней силы. Без HTML. ~20 предложений макс."
+        "Стиль Бендера — едкий, язвительный, жёстко-шуточный. Структура СТРОГО:\n"
+        "1) Вердикт недели для команды (2–4 предложения).\n"
+        "2) По кодам — ПОДРОБНО и ЖЁСТЧЕ: для КАЖДОГО кода оценка 1–10; "
+        "конкретика по упражнениям/весам/reps/RPE/частоте из JSON; "
+        "едкий разбор (не одна фраза — несколько предложений на человека).\n"
+        "3) Рейтинг недели — жёстко-шуточное сравнение атлетов.\n"
+        "4) Прогноз на следующую неделю — по кодам, что делать.\n"
+        "Без уровней силы. Без HTML. Цифры только из JSON."
+    ),
+    "week_plan": (
+        "СКРЫТЫЙ job: персональный план на целевую неделю. Ответ СТРОГО один JSON "
+        "(без markdown, без текста вокруг).\n"
+        "Схема: {\"exercises\":[{\"exercise_id\":int,\"advice\":str,"
+        "\"sets\":[{\"n\":int,\"kg\":number,\"reps\":int,\"rpe\":int}]}]}.\n"
+        "Покрывай ВСЕ exercise_id из target_exercises. Число подходов ≈ target_sets.\n"
+        "advice: стиль Бендера (едкий, язвительный) — РОВНО 3–4 предложения; "
+        "объясни ПОЧЕМУ такие kg/reps/rpe + короткий рабочий акцент "
+        "(техника/темп/отдых); ОБЯЗАТЕЛЬНАЯ согласованность с sets[] "
+        "(нельзя «полная жесть» при низком RPE и наоборот); "
+        "если называешь цифры — только те же, что в sets.\n"
+        "Цифры только из JSON. Без уровней силы."
     ),
     "month": (
         "Разбор за примерно месяц. Стиль Бендера, но без воды: "
@@ -84,10 +100,13 @@ DEFAULT_TASKS: dict[str, str] = {
         "Без уровней силы. Цифры только из JSON."
     ),
     "live_set": (
-        "Атлет СЕЙЧАС в зале. Смотри athlete.live (в т.ч. machine_name), "
-        "sessions / exercise_state / notes. "
-        "Стиль Бендера, но КОРОТКО: (1) техника 3–5 cues под этот тренажёр; "
-        "(2) summary сегодня + история; совет на подход. "
+        "Атлет СЕЙЧАС в зале. Смотри athlete.live (machine_name, logged_sets, "
+        "week_plan если есть). Стиль Бендера, КОРОТКО.\n"
+        "Недельный advice на карточке УЖЕ показан — НЕ пересказывай и НЕ копируй "
+        "текст live.week_plan.advice; не дублируй те же формулировки.\n"
+        "(1) техника 3–5 cues на ЭТОТ подход сейчас (тренажёр учти); "
+        "(2) корректировка по уже залогированным сетам сессии; "
+        "цифры плана (kg/reps/rpe) можно кратко опереться, без повтора advice.\n"
         "Без уровней силы. 6–8 предложений. Цифры только из JSON."
     ),
 }
@@ -154,6 +173,7 @@ def list_prompt_catalog() -> list[tuple[str, str, str]]:
         "session_group": "Разбор тренировки (общий чат)",
         "week": "Неделя (личка)",
         "week_group": "Неделя (общий чат)",
+        "week_plan": "Скрытый: прогноз недели",
         "month": "Месяц",
         "exercise": "Упражнение",
         "live_set": "Совет по подходу",
@@ -161,3 +181,27 @@ def list_prompt_catalog() -> list[tuple[str, str, str]]:
     for kind, title in titles.items():
         items.append((f"{SETTING_PREFIX}{kind}", title, DEFAULT_TASKS[kind]))
     return items
+
+
+PROMPT_SEED_FLAGS: dict[str, tuple[str, str]] = {
+    # flag_key -> (setting_key, task kind)
+    "week_group_prompt_v2": (f"{SETTING_PREFIX}week_group", "week_group"),
+    "live_set_prompt_nodup_v1": (f"{SETTING_PREFIX}live_set", "live_set"),
+    "week_plan_prompt_v1": (f"{SETTING_PREFIX}week_plan", "week_plan"),
+}
+
+
+async def ensure_prompt_seeds(session: AsyncSession) -> None:
+    """One-shot overwrite AppSetting task prompts when product defaults change."""
+    for flag, (setting_key, kind) in PROMPT_SEED_FLAGS.items():
+        row = await session.get(AppSetting, flag)
+        if row is not None:
+            continue
+        body = DEFAULT_TASKS[kind]
+        existing = await session.get(AppSetting, setting_key)
+        if existing is None:
+            session.add(AppSetting(key=setting_key, value=body))
+        else:
+            existing.value = body
+        session.add(AppSetting(key=flag, value="1"))
+    await session.commit()

@@ -177,6 +177,73 @@ def _set_prompt(data: dict) -> str:
     return ui.label_set(set_no, drop)
 
 
+async def _apply_week_plan_to_state(
+    state: FSMContext,
+    *,
+    user_id: int,
+    exercise_id: int | None,
+    set_number: int,
+    drop_index: int = 0,
+) -> str:
+    """Load AI week plan into FSM; return HTML block for exercise card (or "")."""
+    if not exercise_id:
+        await state.update_data(
+            week_plan=None,
+            week_plan_html=None,
+            ai_plan_kg=None,
+            ai_plan_reps=None,
+            ai_plan_rpe=None,
+        )
+        return ""
+    from app.services.week_plan import (
+        format_plan_card_html,
+        get_plan,
+        parse_sets_json,
+        plan_to_live_blob,
+        set_for_number,
+    )
+
+    async with SessionLocal() as session:
+        plan = await get_plan(session, user_id=user_id, exercise_id=int(exercise_id))
+    if not plan:
+        await state.update_data(
+            week_plan=None,
+            week_plan_html=None,
+            ai_plan_kg=None,
+            ai_plan_reps=None,
+            ai_plan_rpe=None,
+        )
+        return ""
+    sets = parse_sets_json(plan.sets_json)
+    row = set_for_number(sets, int(set_number)) if drop_index == 0 else None
+    ai_kg = float(row["kg"]) if row and row.get("kg") is not None else None
+    ai_reps = int(row["reps"]) if row and row.get("reps") is not None else None
+    ai_rpe = int(row["rpe"]) if row and row.get("rpe") is not None else None
+    html_block = format_plan_card_html(plan)
+    data = await state.get_data()
+    updates: dict = {
+        "week_plan": plan_to_live_blob(plan),
+        "week_plan_html": html_block,
+        "ai_plan_kg": ai_kg,
+        "ai_plan_reps": ai_reps,
+        "ai_plan_rpe": ai_rpe,
+    }
+    if drop_index == 0 and ai_kg is not None:
+        updates["draft_weight"] = ai_kg
+        opts = list(data.get("smart_weight_options") or [])
+        if ai_kg not in opts:
+            opts.insert(0, ai_kg)
+        updates["smart_weight_options"] = opts[:6]
+    if drop_index == 0 and ai_reps is not None:
+        updates["smart_default_reps"] = ai_reps
+        ropts = list(data.get("smart_reps_options") or [])
+        if ai_reps not in ropts:
+            ropts.insert(0, ai_reps)
+        updates["smart_reps_options"] = ropts[:6]
+    await state.update_data(**updates)
+    return html_block
+
+
 async def _weight_kb_from_data(
     exercise,
     ex_state,
@@ -189,6 +256,7 @@ async def _weight_kb_from_data(
         draft if draft is not None else data.get("draft_weight"),
         weight_options=data.get("smart_weight_options"),
         show_coach=await get_nn_status() == NnStatus.online,
+        ai_kg=data.get("ai_plan_kg"),
     )
 
 
@@ -206,6 +274,7 @@ async def _reps_kb_from_data(
         preferred,
         reps_options=data.get("smart_reps_options"),
         show_coach=await get_nn_status() == NnStatus.online,
+        ai_reps=data.get("ai_plan_reps"),
     )
 
 
@@ -651,6 +720,13 @@ async def pick_exercise(callback: CallbackQuery, state: FSMContext) -> None:
         set_number=next_set,
         drop_index=0,
     )
+    plan_html = await _apply_week_plan_to_state(
+        state,
+        user_id=user_id,
+        exercise_id=exercise_id,
+        set_number=next_set,
+        drop_index=0,
+    )
     await state.set_state(WorkoutSG.weight)
     data = await state.get_data()
 
@@ -668,6 +744,8 @@ async def pick_exercise(callback: CallbackQuery, state: FSMContext) -> None:
         extra += f"\n{ui.label_pr(pr_line)}"
     if note:
         extra += f"\n{ui.ICO_NOTE} Заметка: {note}"
+    if plan_html:
+        extra += f"\n\n{plan_html}"
     await callback.message.edit_text(
         f"{ui.label_exercise(exercise.name)}\n{ui.label_target(target)}{loaded['hint']}{extra}"
         f"{rest_line(data)}\n\n{_set_prompt(data)}\nВыбери вес или напиши число:",
@@ -852,6 +930,16 @@ async def workout_live_coach(callback: CallbackQuery, state: FSMContext) -> None
     }
     if machine_name:
         live["machine_name"] = machine_name
+    # Prefer FSM blob; else load from DB so live_set sees card advice (anti-dup)
+    week_plan = data.get("week_plan")
+    if not week_plan and isinstance(ex_id, int):
+        from app.services.week_plan import get_plan, plan_to_live_blob
+
+        async with SessionLocal() as session:
+            plan_row = await get_plan(session, user_id=user_id, exercise_id=ex_id)
+            week_plan = plan_to_live_blob(plan_row)
+    if week_plan:
+        live["week_plan"] = week_plan
     if live["saved_sets_in_session"] is None:
         live.pop("saved_sets_in_session")
 
@@ -1170,6 +1258,13 @@ async def next_set(callback: CallbackQuery, state: FSMContext) -> None:
         fallback_reps=fallback_reps,
         prefer_session=True,
     )
+    plan_html = await _apply_week_plan_to_state(
+        state,
+        user_id=user_id,
+        exercise_id=data.get("exercise_id"),
+        set_number=next_no,
+        drop_index=0,
+    )
     await state.set_state(WorkoutSG.weight)
     data = await state.get_data()
 
@@ -1183,8 +1278,9 @@ async def next_set(callback: CallbackQuery, state: FSMContext) -> None:
             ex_state = await _get_state(session, user.id, data["exercise_id"])
         kb = await _weight_kb_from_data(exercise, ex_state, data)
 
+    plan_bit = f"\n\n{plan_html}" if plan_html else ""
     await callback.message.edit_text(
-        f"{ui.label_exercise(name)}\n{format_logged_parts(logged)}\n\n{_set_prompt(data)}"
+        f"{ui.label_exercise(name)}\n{format_logged_parts(logged)}{plan_bit}\n\n{_set_prompt(data)}"
         f"{rest_line(data)}\nВыбери вес или напиши число:",
         reply_markup=kb,
     )

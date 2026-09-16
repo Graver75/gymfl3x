@@ -295,6 +295,7 @@ def weight_kb(
     *,
     weight_options: list[float] | None = None,
     show_coach: bool = False,
+    ai_kg: float | None = None,
 ) -> InlineKeyboardMarkup:
     step = exercise.weight_step or 2.5
     base = draft_weight
@@ -307,10 +308,17 @@ def weight_kb(
             base = 20.0
     base = float(base)
 
+    def _w_label(val: float) -> str:
+        star = (
+            ai_kg is not None
+            and abs(float(val) - float(ai_kg)) < 0.01
+        )
+        return f"★{val:g}" if star else f"{val:g}"
+
     buttons = [
         [
             InlineKeyboardButton(text=f"−{step:g}", callback_data=f"wo:w:-:{step}"),
-            InlineKeyboardButton(text=f"{base:g}", callback_data=f"wo:w:=:{base}"),
+            InlineKeyboardButton(text=_w_label(base), callback_data=f"wo:w:=:{base}"),
             InlineKeyboardButton(text=f"+{step:g}", callback_data=f"wo:w:+:{step}"),
         ]
     ]
@@ -321,6 +329,8 @@ def weight_kb(
     else:
         for delta in (-step * 2, step * 2, -step, step):
             values.append(max(0.0, base + delta))
+    if ai_kg is not None:
+        values.insert(0, float(ai_kg))
     seen: set[float] = set()
     for val in values:
         key = round(float(val), 2)
@@ -330,7 +340,7 @@ def weight_kb(
             continue  # current weight already in the ± row
         seen.add(key)
         presets.append(
-            InlineKeyboardButton(text=f"{val:g}", callback_data=f"wo:w:=:{val}")
+            InlineKeyboardButton(text=_w_label(val), callback_data=f"wo:w:=:{val}")
         )
         if len(presets) >= 6:
             break
@@ -349,15 +359,20 @@ def reps_kb(
     *,
     reps_options: list[int] | None = None,
     show_coach: bool = False,
+    ai_reps: int | None = None,
 ) -> InlineKeyboardMarkup:
     options = list(reps_options or [8, 10, 12, 15])
-    for value in (target_min, target_max, last_reps):
+    for value in (target_min, target_max, last_reps, ai_reps):
         if value and value not in options:
-            options.append(value)
-    options = sorted(set(options))
+            options.append(int(value))
+    options = sorted(set(int(r) for r in options))
     row = [
         InlineKeyboardButton(
-            text=("✓ " if last_reps and r == last_reps else "") + str(r),
+            text=(
+                f"★{r}"
+                if ai_reps is not None and r == int(ai_reps)
+                else (("✓ " if last_reps and r == last_reps else "") + str(r))
+            ),
             callback_data=f"wo:r:{r}",
         )
         for r in options
@@ -448,6 +463,7 @@ def admin_menu_kb(*, full: bool = True) -> InlineKeyboardMarkup:
                 [InlineKeyboardButton(text=ui.BTN_ADM_SNAPSHOT, callback_data="adm:snapshot")],
                 [InlineKeyboardButton(text=ui.BTN_ADM_NN_LOAD, callback_data="adm:nnload")],
                 [InlineKeyboardButton(text=ui.BTN_ADM_BCAST, callback_data="adm:bcast")],
+                [InlineKeyboardButton(text=ui.BTN_ADM_HIDDEN_AI, callback_data="adm:hidden")],
             ]
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -668,6 +684,40 @@ def admin_bcast_targets_kb(
         [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:bcast")]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_hidden_kb() -> InlineKeyboardMarkup:
+    from app.services.week_plan import HIDDEN_JOBS
+
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="—— Форс скрытый job ——", callback_data="adm:noop")],
+    ]
+    for key, title in HIDDEN_JOBS.items():
+        rows.append(
+            [InlineKeyboardButton(text=title[:64], callback_data=f"adm:hidden:k:{key}")]
+        )
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_hidden_week_plan_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="▶ Всем атлетам",
+                    callback_data="adm:hidden:go:week_plan:all",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="👤 Только мне",
+                    callback_data="adm:hidden:go:week_plan:me",
+                )
+            ],
+            [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:hidden")],
+        ]
+    )
 
 
 def admin_nn_prompts_kb(items: list[tuple[str, str]]) -> InlineKeyboardMarkup:

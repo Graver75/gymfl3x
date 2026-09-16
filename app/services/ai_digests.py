@@ -232,6 +232,14 @@ async def send_week_digests(bot: Bot, settings: Settings) -> None:
         if await get_nn_status() != NnStatus.online:
             return
 
+        # Hidden week_plan job (same schedule window; own dedup)
+        try:
+            from app.services.week_plan import maybe_run_scheduled_week_plan
+
+            await maybe_run_scheduled_week_plan(bot)
+        except Exception:
+            logger.exception("scheduled week_plan failed")
+
         users = list(
             (
                 await session.execute(
@@ -339,6 +347,7 @@ def digest_schedule_snapshot(settings: Settings | None = None) -> dict[str, Any]
             "session_group",
             "week",
             "week_group",
+            "week_plan",
             "live_set",
         ],
         "coming_soon": [

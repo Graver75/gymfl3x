@@ -259,7 +259,7 @@ async def request_coach(
     user_text = await user_prompt_for(kind, athlete_json, focus or {}, locale=locale)
 
     hist = history or []
-    if kind in {"session", "live_set", "session_group", "week_group"}:
+    if kind in {"session", "live_set", "session_group", "week_group", "week_plan"}:
         hist = []
     else:
         # Compact long prior tips so they don't re-bloat the prompt

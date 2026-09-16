@@ -21,7 +21,7 @@ _PT = ZoneInfo("America/Los_Angeles")
 SETTING_TOKENN_LAST_REMAIN = "tokenn_last_remain_quota"
 
 LIVE_KIND = "live_set"
-PROFILE_KINDS = frozenset({"week", "month", "exercise", "week_group"})
+PROFILE_KINDS = frozenset({"week", "month", "exercise", "week_group", "week_plan"})
 SESSION_KINDS = frozenset({"session", "session_group"})
 # Fallback avg quota units when Tokenn samples are missing (from observed UI)
 _FALLBACK_QUOTA = {

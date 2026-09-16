@@ -11,6 +11,7 @@ from app.services.athlete_features import build_athlete_snapshot
 WINDOW_DAYS = {
     "session": 14,
     "week": 21,
+    "week_plan": 21,
     "month": 45,
     "exercise": 45,
     "live_set": 45,
@@ -20,6 +21,7 @@ WINDOW_DAYS = {
 MAX_SESSIONS = {
     "session": 8,
     "week": 12,
+    "week_plan": 12,
     "month": 18,
     "exercise": 14,
     "live_set": 14,

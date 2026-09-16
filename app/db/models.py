@@ -316,8 +316,38 @@ class RecapSent(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     chat_id: Mapped[int] = mapped_column(BigInteger)
     recap_date: Mapped[date] = mapped_column(Date)
-    kind: Mapped[str] = mapped_column(String(16))  # reminder | recap
+    kind: Mapped[str] = mapped_column(String(16))  # reminder | recap | ai_week_plan
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class UserExerciseWeekPlan(Base):
+    """AI-prescribed per-exercise set targets for a calendar week (Mon start)."""
+
+    __tablename__ = "user_exercise_week_plans"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "exercise_id",
+            "week_start",
+            name="uq_user_ex_week_plan",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    exercise_id: Mapped[int] = mapped_column(
+        ForeignKey("template_exercises.id", ondelete="CASCADE"), index=True
+    )
+    week_start: Mapped[date] = mapped_column(Date, index=True)
+    advice: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sets_json: Mapped[str] = mapped_column(Text, default="[]")
+    usage_log_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    user: Mapped[User] = relationship()
+    exercise: Mapped[TemplateExercise] = relationship()
 
 
 class NnDialogMessage(Base):

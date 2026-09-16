@@ -1593,6 +1593,90 @@ async def adm_bcast_go(callback: CallbackQuery) -> None:
     )
 
 
+@router.callback_query(F.data == "adm:hidden")
+async def adm_hidden_menu(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    from app.keyboards import admin_hidden_kb
+
+    await safe_edit_text(
+        callback.message,
+        f"{ui.BTN_ADM_HIDDEN_AI}\n\n"
+        "Скрытые job'ы не пишут в чат атлетам — только пишут план в БД "
+        "и шлют тебе превью результата.\n"
+        "Автозапуск: вместе с недельным дайджестом (тот же день/час).\n"
+        "Полный request/response — в «Запросы ИИ» (kind=week_plan).",
+        reply_markup=admin_hidden_kb(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:hidden:k:"))
+async def adm_hidden_pick(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    if not await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    kind = callback.data.split(":")[-1]
+    from app.keyboards import admin_hidden_week_plan_kb
+    from app.services.week_plan import HIDDEN_JOBS, target_week_start
+
+    if kind not in HIDDEN_JOBS:
+        await callback.answer("?", show_alert=True)
+        return
+    ws = target_week_start()
+    await safe_edit_text(
+        callback.message,
+        f"Форс: {HIDDEN_JOBS[kind]}\n"
+        f"Целевая неделя с {ws.isoformat()} (пн).\n"
+        "Кому прогнать?",
+        reply_markup=admin_hidden_week_plan_kb(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:hidden:go:"))
+async def adm_hidden_go(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    user = await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin")
+    if not user:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    # adm:hidden:go:week_plan:all|me
+    parts = callback.data.split(":")
+    if len(parts) < 5:
+        await callback.answer("Битые данные", show_alert=True)
+        return
+    kind = parts[3]
+    scope = parts[4]
+    from app.keyboards import admin_hidden_kb
+    from app.services.week_plan import HIDDEN_JOBS, force_week_plan
+
+    if kind != "week_plan" or kind not in HIDDEN_JOBS:
+        await callback.answer("?", show_alert=True)
+        return
+    only_id = user.id if scope == "me" else None
+    await callback.answer("Считаю план… это может занять минуту")
+    try:
+        status = await force_week_plan(
+            callback.bot,
+            admin_telegram_id=callback.from_user.id,
+            only_user_id=only_id,
+        )
+    except Exception as exc:
+        status = f"Ошибка: {exc}"[:300]
+    await safe_edit_text(
+        callback.message,
+        f"{ui.BTN_ADM_HIDDEN_AI}\n\n{status}",
+        reply_markup=admin_hidden_kb(),
+    )
+
+
 @router.callback_query(F.data == "adm:chats")
 @router.callback_query(F.data.startswith("adm:chats:p:"))
 async def adm_chats(callback: CallbackQuery, state: FSMContext) -> None:

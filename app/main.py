@@ -56,6 +56,9 @@ async def main() -> None:
         synced = await sync_standards_from_catalog(session)
         if synced:
             logger.info("Strength standards catalog sync: +%s", synced)
+        from app.services.coach_prompts import ensure_prompt_seeds
+
+        await ensure_prompt_seeds(session)
 
     bot = Bot(
         token=settings.bot_token,
