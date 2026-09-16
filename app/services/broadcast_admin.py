@@ -13,7 +13,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.db.models import AppSetting, GroupChat, User
+from app.db.models import AppSetting, User
 from app.db.session import SessionLocal
 from app import ui_copy as ui
 

@@ -101,6 +101,16 @@ def _default_code(name: str) -> str:
     return (cleaned[:1] or "?").upper()
 
 
+async def short_code_taken(
+    session: AsyncSession, code: str, *, exclude_user_id: int | None = None
+) -> bool:
+    q = select(User).where(User.short_code == code.upper())
+    if exclude_user_id is not None:
+        q = q.where(User.id != exclude_user_id)
+    result = await session.execute(q.limit(1))
+    return result.scalar_one_or_none() is not None
+
+
 async def apply_onboarding(
     session: AsyncSession,
     user: User,
@@ -111,11 +121,14 @@ async def apply_onboarding(
     height_cm: float | None,
     experience_months: int,
     sex: str | None = None,
+    age: int | None = None,
 ) -> User:
     user.display_name = display_name[:64]
     user.short_code = short_code[:8].upper()
     user.body_weight = body_weight
     user.height_cm = height_cm
+    if age is not None:
+        user.age = int(age)
     if sex in {"male", "female"}:
         user.sex = sex
     set_experience_months(user, experience_months)

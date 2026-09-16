@@ -122,11 +122,40 @@ async def onb_name(message: Message, state: FSMContext) -> None:
 async def onb_code(message: Message, state: FSMContext) -> None:
     if await _bail_if_already_onboarded(message, state):
         return
+    if message.from_user is None:
+        return
     code = (message.text or "").strip().upper()
     if not (1 <= len(code) <= 4):
         await message.answer("Код 1–4 символа.")
         return
+    async with SessionLocal() as session:
+        from app.services.users import short_code_taken
+
+        user = await get_or_create_user(
+            session,
+            message.from_user.id,
+            message.from_user.full_name or "Athlete",
+        )
+        if await short_code_taken(session, code, exclude_user_id=user.id):
+            await message.answer("Этот код уже занят. Выбери другой.")
+            return
     await state.update_data(short_code=code)
+    await state.set_state(OnboardingSG.age)
+    await message.answer("Сколько тебе полных лет? Числом, например 28.")
+
+
+@router.message(OnboardingSG.age)
+async def onb_age(message: Message, state: FSMContext) -> None:
+    if await _bail_if_already_onboarded(message, state):
+        return
+    try:
+        age = int((message.text or "").strip())
+        if not (10 <= age <= 100):
+            raise ValueError
+    except ValueError:
+        await message.answer("Возраст числом от 10 до 100.")
+        return
+    await state.update_data(age=age)
     await state.set_state(OnboardingSG.body_weight)
     await message.answer("Вес тела в кг (например 78 или 78.5):")
 
@@ -233,6 +262,7 @@ async def onb_experience(message: Message, state: FSMContext) -> None:
             height_cm=data.get("height_cm"),
             experience_months=months,
             sex=data.get("sex"),
+            age=data.get("age"),
         )
 
     await state.clear()

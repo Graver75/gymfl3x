@@ -163,6 +163,7 @@ async def build_athlete_snapshot(
             "height_cm": user.height_cm,
             "experience_months": effective_experience_months(user),
             "sex": getattr(user, "sex", None),
+            "age": getattr(user, "age", None),
         },
         "body_weight_series": [
             {"weight": row.weight, "recorded_at": _iso(row.recorded_at)} for row in bw

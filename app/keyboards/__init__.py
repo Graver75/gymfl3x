@@ -83,6 +83,19 @@ def profile_kb(
         ]
     )
     rows.append(
+        [
+            InlineKeyboardButton(
+                text=ui.BTN_PROFILE_EDIT_NAME, callback_data="profile:edit:name"
+            ),
+            InlineKeyboardButton(
+                text=ui.BTN_PROFILE_EDIT_CODE, callback_data="profile:edit:code"
+            ),
+            InlineKeyboardButton(
+                text=ui.BTN_PROFILE_EDIT_AGE, callback_data="profile:edit:age"
+            ),
+        ]
+    )
+    rows.append(
         [InlineKeyboardButton(text=ui.BTN_PROFILE_PROGRESS, callback_data="profile:progress")]
     )
     rows.append(

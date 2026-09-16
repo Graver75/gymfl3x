@@ -4,6 +4,7 @@ from aiogram.fsm.state import State, StatesGroup
 class OnboardingSG(StatesGroup):
     display_name = State()
     short_code = State()
+    age = State()
     body_weight = State()
     height = State()
     sex = State()
@@ -49,3 +50,6 @@ class AdminSG(StatesGroup):
 class ProfileSG(StatesGroup):
     edit_weight = State()
     edit_experience = State()
+    edit_name = State()
+    edit_code = State()
+    edit_age = State()

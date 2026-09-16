@@ -42,6 +42,8 @@ async def _add_missing_columns(conn) -> None:
         )
     if "sex" not in cols:
         await conn.execute(text("ALTER TABLE users ADD COLUMN sex VARCHAR(16)"))
+    if "age" not in cols:
+        await conn.execute(text("ALTER TABLE users ADD COLUMN age INTEGER"))
     if "experience_as_of" not in cols:
         await conn.execute(
             text("ALTER TABLE users ADD COLUMN experience_as_of DATETIME")

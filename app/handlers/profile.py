@@ -38,6 +38,21 @@ async def _require_user(message: Message):
         return user
 
 
+async def _require_user_cb(callback: CallbackQuery):
+    if callback.from_user is None:
+        return None
+    async with SessionLocal() as session:
+        user = await get_or_create_user(
+            session,
+            callback.from_user.id,
+            callback.from_user.full_name or "Athlete",
+        )
+        if not user.onboarding_done:
+            await callback.answer("Сначала /start", show_alert=True)
+            return None
+        return user
+
+
 def _log_level_label(level: LogLevel | str | None) -> str:
     value = level.value if isinstance(level, LogLevel) else (level or LogLevel.minimal.value)
     name = ui.LOG_LEVEL_LABELS.get(value, value)
@@ -58,10 +73,13 @@ def _profile_text(user, *, nn_line: str | None = None) -> str:
     log_level = getattr(user, "log_level", None) or LogLevel.minimal
     sex = getattr(user, "sex", None)
     sex_label = "Ж" if sex == "female" else ("М" if sex == "male" else "не указан")
+    age = getattr(user, "age", None)
+    age_s = str(age) if age else "—"
     lines = [
         f"{ui.b(ui.BTN_PROFILE)}",
         f"Имя: {ui.b(user.display_name)}",
         f"Код: {ui.b(user.short_code)}",
+        f"Возраст: {ui.b(age_s)}",
         f"Вес: {ui.b(f'{user.body_weight:g} кг') if user.body_weight else ui.b('—')}",
         f"Рост: {ui.b(height)}",
         f"Стаж: {ui.b(f'{months} мес')}",
@@ -112,7 +130,7 @@ async def show_profile(message: Message, state: FSMContext) -> None:
     nn_line = await _nn_line()
     await message.answer(
         _profile_text(user, nn_line=nn_line) + "\n\nФаза, пол и детализация лога — кнопки ниже.\n"
-        "Вес: /weight · Стаж: /experience",
+        "Имя / код / возраст — кнопки. Вес: /weight · Стаж: /experience",
         reply_markup=main_menu(show_admin=can_open_admin(user)),
     )
     await message.answer(
@@ -409,6 +427,151 @@ async def profile_reset_ok(callback: CallbackQuery) -> None:
         reply_markup=main_menu(show_admin=show_admin),
     )
     await callback.answer("Обнулено")
+
+
+@router.callback_query(F.data == "profile:edit:name")
+async def profile_edit_name_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    user = await _require_user_cb(callback)
+    if not user:
+        return
+    await state.set_state(ProfileSG.edit_name)
+    await callback.message.answer(f"Сейчас имя: {user.display_name}\nПришли новое имя:")
+    await callback.answer()
+
+
+@router.message(ProfileSG.edit_name)
+async def profile_save_name(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    name = (message.text or "").strip()
+    if len(name) < 1:
+        await message.answer("Нужно имя.")
+        return
+    async with SessionLocal() as session:
+        user = await get_or_create_user(
+            session,
+            message.from_user.id,
+            message.from_user.full_name or "Athlete",
+        )
+        user.display_name = name[:64]
+        await session.commit()
+        show_admin = can_open_admin(user)
+        text = _profile_text(user, nn_line=await _nn_line())
+        log_level = getattr(user, "log_level", None) or LogLevel.minimal
+        phase = user.phase
+        sex = getattr(user, "sex", None)
+    await state.clear()
+    await message.answer(
+        f"Имя обновлено.\n\n{text}",
+        reply_markup=main_menu(show_admin=show_admin),
+    )
+    await message.answer(
+        "Настройки профиля:",
+        reply_markup=profile_kb(phase, log_level, sex=sex),
+    )
+
+
+@router.callback_query(F.data == "profile:edit:code")
+async def profile_edit_code_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    user = await _require_user_cb(callback)
+    if not user:
+        return
+    await state.set_state(ProfileSG.edit_code)
+    await callback.message.answer(
+        f"Сейчас код: {user.short_code}\nПришли новый код (1–4 символа):"
+    )
+    await callback.answer()
+
+
+@router.message(ProfileSG.edit_code)
+async def profile_save_code(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    code = (message.text or "").strip().upper()
+    if not (1 <= len(code) <= 4):
+        await message.answer("Код 1–4 символа.")
+        return
+    from app.services.users import short_code_taken
+
+    async with SessionLocal() as session:
+        user = await get_or_create_user(
+            session,
+            message.from_user.id,
+            message.from_user.full_name or "Athlete",
+        )
+        if await short_code_taken(session, code, exclude_user_id=user.id):
+            await message.answer("Этот код уже занят. Выбери другой.")
+            return
+        user.short_code = code
+        await session.commit()
+        show_admin = can_open_admin(user)
+        text = _profile_text(user, nn_line=await _nn_line())
+        log_level = getattr(user, "log_level", None) or LogLevel.minimal
+        phase = user.phase
+        sex = getattr(user, "sex", None)
+    await state.clear()
+    await message.answer(
+        f"Код обновлён: {code}\n\n{text}",
+        reply_markup=main_menu(show_admin=show_admin),
+    )
+    await message.answer(
+        "Настройки профиля:",
+        reply_markup=profile_kb(phase, log_level, sex=sex),
+    )
+
+
+@router.callback_query(F.data == "profile:edit:age")
+async def profile_edit_age_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    user = await _require_user_cb(callback)
+    if not user:
+        return
+    cur = getattr(user, "age", None)
+    await state.set_state(ProfileSG.edit_age)
+    await callback.message.answer(
+        f"Сейчас возраст: {cur if cur else '—'}\nПришли возраст числом:"
+    )
+    await callback.answer()
+
+
+@router.message(ProfileSG.edit_age)
+async def profile_save_age(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    try:
+        age = int((message.text or "").strip())
+        if not (10 <= age <= 100):
+            raise ValueError
+    except ValueError:
+        await message.answer("Возраст числом от 10 до 100.")
+        return
+    async with SessionLocal() as session:
+        user = await get_or_create_user(
+            session,
+            message.from_user.id,
+            message.from_user.full_name or "Athlete",
+        )
+        user.age = age
+        await session.commit()
+        show_admin = can_open_admin(user)
+        text = _profile_text(user, nn_line=await _nn_line())
+        log_level = getattr(user, "log_level", None) or LogLevel.minimal
+        phase = user.phase
+        sex = getattr(user, "sex", None)
+    await state.clear()
+    await message.answer(
+        f"Возраст обновлён: {age}\n\n{text}",
+        reply_markup=main_menu(show_admin=show_admin),
+    )
+    await message.answer(
+        "Настройки профиля:",
+        reply_markup=profile_kb(phase, log_level, sex=sex),
+    )
 
 
 @router.message(Command("weight"))

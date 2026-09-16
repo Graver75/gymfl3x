@@ -236,6 +236,7 @@ async def build_coach_context(
             "exp_m": user.get("experience_months"),
             "code": user.get("short_code"),
             "sex": user.get("sex"),
+            "age": user.get("age"),
         },
         "notes": notes,
         "exercise_state": states,

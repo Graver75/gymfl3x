@@ -56,6 +56,7 @@ class User(Base):
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     display_name: Mapped[str] = mapped_column(String(64))
     short_code: Mapped[str] = mapped_column(String(8))
+    age: Mapped[int | None] = mapped_column(Integer, nullable=True)
     body_weight: Mapped[float | None] = mapped_column(Float, nullable=True)
     height_cm: Mapped[float | None] = mapped_column(Float, nullable=True)
     experience_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
