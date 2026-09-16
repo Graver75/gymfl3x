@@ -242,10 +242,8 @@ _KIND_PAYLOAD_BRIEF: dict[str, str] = {
         "Фокус вердикта — текущая неделя. Без target_exercises."
     ),
     "week_plan": (
-        "ДА, полное досье атлета как у week: phase/вес/рост/пол/возраст/стаж "
-        "(exp_m)/код + год сессий + working weights + notes + adherence/BW + "
-        "schedule. Плюс week_start и target_exercises[] (id/name/machine/targets). "
-        "Ответ — JSON плана, не текст в чат."
+        "Как week (личное + год прогресса) + week_start + target_exercises[] "
+        "(id/name/machine/targets). Ответ — JSON плана, не текст в чат."
     ),
     "month": (
         "Один атлет · ~45 дн · до 18 сессий. user, sessions (by_ex), "
@@ -324,19 +322,19 @@ _KIND_PAYLOAD_FULL: dict[str, str] = {
     ),
     "week_plan": (
         "kind=week_plan — скрытый прогноз (не в чат)\n"
-        "База = тот же build_coach_context(kind=week_plan), что и week:\n\n"
-        "Личное (да, попадает):\n"
-        "· user.phase, log_level, bw, height_cm, sex, age, exp_m, code\n\n"
-        "Прогресс (да, попадает):\n"
+        "Тот же контекст, что week:\n\n"
+        "user:\n"
+        "· phase, log_level, bw, height_cm, sex, age, exp_m, code\n\n"
+        "прогресс:\n"
         "· sessions до 365д (свежие полные by_ex, старые компакт)\n"
-        "· exercise_state (рабочие/suggested веса, streak, notes)\n"
+        "· exercise_state (ww/sw, streak, notes)\n"
         "· notes, adherence, aggregates, body_weight_series, schedule\n\n"
-        "Дополнительно только для week_plan:\n"
+        "плюс:\n"
         "· week_start\n"
         "· target_exercises[]: exercise_id, name, machine_name,\n"
         "  target_sets, target_reps_min/max, weight_step\n"
-        "· chunk (если дробление большого дня)\n\n"
-        "Ответ модели: JSON {exercises:[{exercise_id, advice, sets[{n,kg,reps,rpe}]}]}\n"
+        "· chunk (если дробление)\n\n"
+        "Ответ: JSON {exercises:[{exercise_id, advice, sets[{n,kg,reps,rpe}]}]}\n"
         "Нет: live, athletes[], уровни силы"
     ),
     "month": (
