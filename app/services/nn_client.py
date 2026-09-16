@@ -1,16 +1,25 @@
-"""Fault-tolerant client for the optional gymflex-nn service."""
+"""Coach status / request façade — multi-provider remote LLM."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from enum import Enum
 from typing import Any
 
-import httpx
-
 from app.config import get_settings
+from app.db.session import SessionLocal
+from app.services.coach_prompts import DATA_SCHEMA_RU, SYSTEM_PROMPT, user_prompt_for
+from app.services.coach_usage import is_quota_exhausted, record_usage, usage_snapshot
+from app.services.llm_providers import (
+    generate_with_provider,
+    get_active_provider_id,
+    get_provider_spec,
+    provider_configured,
+    providers_status_snapshot,
+)
 
 logger = logging.getLogger("gymflex.nn")
 
@@ -19,6 +28,8 @@ _status_cache: tuple[float, "NnStatus"] | None = None
 _status_lock = asyncio.Lock()
 _meta_cache: tuple[float, dict[str, Any]] | None = None
 _META_TTL_SEC = 300.0
+
+_live_cooldown: dict[int, float] = {}
 
 
 class NnStatus(str, Enum):
@@ -33,20 +44,6 @@ STATUS_LABELS = {
     NnStatus.online: "онлайн",
 }
 
-# Fallback if /v1/meta unavailable
-_FALLBACK_META = {
-    "system_prompt": (
-        "Ты — краткий русскоязычный коуч по силовым тренировкам в зале.\n"
-        "Опирайся только на JSON-данные атлета…"
-    ),
-    "data_schema_ru": (
-        "В запрос уходит компактный JSON только вашего атлета: профиль, adherence, "
-        "сессии, подходы, заметки, вес тела, focus текущего разбора."
-    ),
-    "model": "unknown",
-    "max_history": 12,
-}
-
 
 def status_label(status: NnStatus) -> str:
     return STATUS_LABELS.get(status, status.value)
@@ -55,6 +52,24 @@ def status_label(status: NnStatus) -> str:
 def invalidate_status_cache() -> None:
     global _status_cache
     _status_cache = None
+
+
+def live_cooldown_remaining(user_id: int) -> float:
+    deadline = _live_cooldown.get(user_id)
+    if not deadline:
+        return 0.0
+    left = deadline - time.monotonic()
+    if left <= 0:
+        _live_cooldown.pop(user_id, None)
+        return 0.0
+    return left
+
+
+def mark_live_cooldown(user_id: int) -> None:
+    settings = get_settings()
+    _live_cooldown[user_id] = time.monotonic() + float(
+        settings.coach_live_cooldown_sec or 90
+    )
 
 
 async def get_nn_status(*, force: bool = False) -> NnStatus:
@@ -72,68 +87,96 @@ async def get_nn_status(*, force: bool = False) -> NnStatus:
         now = time.monotonic()
         if not force and _status_cache and now - _status_cache[0] < _STATUS_TTL_SEC:
             return _status_cache[1]
-        status = await _ping_health()
+        status = await _resolve_status()
         _status_cache = (time.monotonic(), status)
         return status
 
 
-async def _ping_health() -> NnStatus:
-    settings = get_settings()
-    url = f"{settings.nn_url.rstrip('/')}/health"
+async def _resolve_status() -> NnStatus:
     try:
-        async with httpx.AsyncClient(timeout=settings.nn_health_timeout_sec) as client:
-            r = await client.get(url)
-            if r.status_code == 200:
-                data = r.json()
-                if isinstance(data, dict) and data.get("ok"):
-                    return NnStatus.online
-            return NnStatus.offline
-    except Exception as exc:
-        logger.debug("NN health offline: %s", exc)
+        async with SessionLocal() as session:
+            exhausted, reason = await is_quota_exhausted(session)
+            if exhausted:
+                logger.info("Coach soft-blocked (%s)", reason)
+                return NnStatus.offline
+            pid = await get_active_provider_id(session)
+    except Exception:
+        logger.debug("Quota/provider resolve failed", exc_info=True)
+        pid = await get_active_provider_id()
+
+    spec = get_provider_spec(pid)
+    if spec is None or not provider_configured(spec):
         return NnStatus.offline
+
+    from app.services.llm_providers import ping_provider
+
+    try:
+        ok = await ping_provider(spec)
+    except Exception:
+        ok = False
+    return NnStatus.online if ok else NnStatus.offline
 
 
 async def fetch_nn_meta(*, force: bool = False) -> dict[str, Any]:
-    """System prompt + data schema. Never raises."""
     global _meta_cache
     now = time.monotonic()
     if not force and _meta_cache and now - _meta_cache[0] < _META_TTL_SEC:
         return _meta_cache[1]
 
-    settings = get_settings()
-    if not settings.nn_enabled:
-        return dict(_FALLBACK_META)
-
-    url = f"{settings.nn_url.rstrip('/')}/v1/meta"
-    try:
-        async with httpx.AsyncClient(timeout=settings.nn_health_timeout_sec) as client:
-            r = await client.get(url)
-            if r.status_code == 200:
-                data = r.json()
-                if isinstance(data, dict) and data.get("system_prompt"):
-                    _meta_cache = (time.monotonic(), data)
-                    return data
-    except Exception as exc:
-        logger.debug("NN meta failed: %s", exc)
-    return dict(_FALLBACK_META)
+    pid = await get_active_provider_id()
+    spec = get_provider_spec(pid)
+    data = {
+        "system_prompt": SYSTEM_PROMPT,
+        "data_schema_ru": DATA_SCHEMA_RU,
+        "model": spec.model if spec else "?",
+        "provider": pid,
+        "max_history": 12,
+    }
+    _meta_cache = (time.monotonic(), data)
+    return data
 
 
 async def fetch_nn_load() -> dict[str, Any] | None:
-    """Admin load snapshot. Never raises; None if unavailable."""
+    """Admin usage + provider status. Never raises."""
     settings = get_settings()
     if not settings.nn_enabled:
         return None
-    url = f"{settings.nn_url.rstrip('/')}/v1/load"
     try:
-        async with httpx.AsyncClient(timeout=settings.nn_health_timeout_sec) as client:
-            r = await client.get(url)
-            if r.status_code != 200:
-                return None
-            data = r.json()
-            return data if isinstance(data, dict) else None
+        async with SessionLocal() as session:
+            snap = await usage_snapshot(session)
+            active = await get_active_provider_id(session)
+        providers = await providers_status_snapshot()
+        status = await get_nn_status(force=True)
+        active_spec = get_provider_spec(active)
+        snap["status"] = status.value
+        snap["provider"] = active
+        snap["provider_label"] = active_spec.label if active_spec else active
+        snap["model"] = active_spec.model if active_spec else settings.gemini_model
+        snap["key_configured"] = bool(
+            active_spec and provider_configured(active_spec)
+        )
+        snap["providers"] = providers
+        return snap
     except Exception as exc:
-        logger.debug("NN load failed: %s", exc)
-        return None
+        logger.warning("Coach usage snapshot failed: %s", exc)
+        return {
+            "provider": "?",
+            "model": settings.gemini_model,
+            "status": "error",
+            "error": str(exc)[:200],
+            "key_configured": False,
+            "day_req": 0,
+            "day_tok_in": 0,
+            "day_tok_out": 0,
+            "day_429": 0,
+            "by_kind": {},
+            "rpm": 0,
+            "rpd_limit": settings.gemini_rpd_limit,
+            "rpm_limit": settings.gemini_rpm_limit,
+            "history": [],
+            "last_429": None,
+            "providers": [],
+        }
 
 
 async def request_coach(
@@ -146,35 +189,84 @@ async def request_coach(
     user_label: str | None = None,
     locale: str = "ru",
 ) -> str | None:
-    """Call POST /v1/coach. Returns text or None. Never raises."""
+    """Generate coach text via active LLM provider. Never raises."""
     settings = get_settings()
     if not settings.nn_enabled:
         return None
-    status = await get_nn_status()
-    if status != NnStatus.online:
+
+    pid = await get_active_provider_id()
+    spec = get_provider_spec(pid)
+    if spec is None or not provider_configured(spec):
         return None
 
-    url = f"{settings.nn_url.rstrip('/')}/v1/coach"
-    payload = {
-        "kind": kind,
-        "locale": locale,
-        "user_id": user_id,
-        "user_label": user_label,
-        "athlete": athlete,
-        "focus": focus or {},
-        "history": history or [],
-    }
     try:
-        async with httpx.AsyncClient(timeout=settings.nn_timeout_sec) as client:
-            r = await client.post(url, json=payload)
-            if r.status_code != 200:
-                logger.warning("NN coach HTTP %s: %s", r.status_code, r.text[:200])
+        async with SessionLocal() as session:
+            exhausted, reason = await is_quota_exhausted(session)
+            if exhausted:
+                await record_usage(
+                    session,
+                    status="error",
+                    kind=kind,
+                    provider=pid,
+                    user_id=user_id,
+                    user_label=user_label,
+                    error=f"soft_block:{reason}",
+                    quota_id="soft_block",
+                    quota_value=reason,
+                )
                 invalidate_status_cache()
                 return None
-            data = r.json()
-            text = (data.get("text") or "").strip()
-            return text or None
-    except Exception as exc:
-        logger.warning("NN coach failed: %s", exc)
+    except Exception:
+        logger.debug("Pre-flight quota check failed", exc_info=True)
+
+    try:
+        athlete_json = json.dumps(athlete, ensure_ascii=False, default=str)
+    except Exception:
+        athlete_json = str(athlete)
+    if len(athlete_json) > 28_000:
+        athlete_json = athlete_json[:27_990] + "…"
+
+    user_text = user_prompt_for(kind, athlete_json, focus or {}, locale=locale)
+
+    hist = history or []
+    if kind == "session":
+        hist = []
+    elif kind == "live_set":
+        hist = hist[-2:]
+    else:
+        hist = hist[-6:]
+
+    used_pid, result = await generate_with_provider(
+        provider_id=pid,
+        system=SYSTEM_PROMPT,
+        user_text=user_text,
+        history=hist,
+    )
+
+    try:
+        async with SessionLocal() as session:
+            await record_usage(
+                session,
+                status=result.status,
+                kind=kind,
+                provider=used_pid,
+                user_id=user_id,
+                user_label=user_label,
+                duration_sec=result.duration_sec,
+                prompt_tokens=result.prompt_tokens,
+                output_tokens=result.output_tokens,
+                error=result.error,
+                quota_id=result.quota_id,
+                quota_value=result.quota_value,
+            )
+    except Exception:
+        logger.exception("Usage log failed")
+
+    if result.status != "ok":
         invalidate_status_cache()
         return None
+
+    if kind == "live_set" and user_id is not None:
+        mark_live_cooldown(user_id)
+
+    return (result.text or "").strip() or None

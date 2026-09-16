@@ -89,6 +89,13 @@ async def _add_missing_columns(conn) -> None:
                     text(f"ALTER TABLE exercise_strength_standard ADD COLUMN {col} FLOAT")
                 )
 
+    result = await conn.execute(text("PRAGMA table_info(coach_usage_logs)"))
+    usage_cols = {row[1] for row in result}
+    if usage_cols and "provider" not in usage_cols:
+        await conn.execute(
+            text("ALTER TABLE coach_usage_logs ADD COLUMN provider VARCHAR(32)")
+        )
+
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with SessionLocal() as session:

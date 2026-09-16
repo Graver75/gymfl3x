@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from app import ui_copy as ui
+from app.config import get_settings
 from app.db.session import SessionLocal
 from app.filters import PrivateChat
 from app.keyboards import (
@@ -31,6 +32,16 @@ router.message.filter(PrivateChat())
 router.callback_query.filter(PrivateChat())
 
 
+def _profile_on() -> bool:
+    return bool(get_settings().coach_profile_enabled)
+
+
+def _menu_kb(*, online: bool, turns: int = 0):
+    return coach_menu_kb(
+        online=online, turns=turns, profile_enabled=_profile_on()
+    )
+
+
 async def _coach_home_text(status: NnStatus, *, turns: int = 0) -> str:
     line = format_nn_status_line(status)
     dialog_line = (
@@ -38,23 +49,33 @@ async def _coach_home_text(status: NnStatus, *, turns: int = 0) -> str:
         if turns
         else "Ваш диалог пуст — только системный промпт."
     )
+    profile_note = ""
+    if not _profile_on():
+        profile_note = (
+            "\nЛичные разборы (неделя / месяц / упражнение) пока выключены "
+            "— экономия квоты Gemini.\n"
+            "Авторазбор после тренировки и «Совет ИИ» в подходе работают, "
+            "если нейросеть онлайн."
+        )
     if status == NnStatus.online:
         return (
             f"{ui.BTN_COACH}\n{line}\n{dialog_line}\n\n"
-            "Выбери тип разбора. На CPU это может занять 1–2 минуты.\n"
-            "Веса и программу бот сам не меняет — только текст.\n"
+            "Коуч на Gemini (удалённо). Веса и программу бот сам не меняет — только текст.\n"
             f"«{ui.BTN_COACH_PROMPT}» — что уходит в модель заранее."
+            f"{profile_note}"
         )
     if status == NnStatus.disabled:
         return (
             f"{ui.BTN_COACH}\n{line}\n{dialog_line}\n\n"
             "Вызовы к нейросети отключены (NN_ENABLED=false).\n"
             "Логирование тренировок работает как обычно."
+            f"{profile_note}"
         )
     return (
         f"{ui.BTN_COACH}\n{line}\n{dialog_line}\n\n"
-        "Сервис нейросети не запущен. Бот работает без него.\n"
-        "На сервере: docker compose --profile nn up -d"
+        "Коуч офлайн: нет GEMINI_API_KEY, квота исчерпана или API недоступен.\n"
+        "Логирование тренировок работает как обычно."
+        f"{profile_note}"
     )
 
 
@@ -86,7 +107,7 @@ async def coach_menu_msg(message: Message, state: FSMContext) -> None:
     )
     await message.answer(
         "Разбор:",
-        reply_markup=coach_menu_kb(online=status == NnStatus.online, turns=turns),
+        reply_markup=_menu_kb(online=status == NnStatus.online, turns=turns),
     )
 
 
@@ -103,7 +124,7 @@ async def coach_menu_cb(callback: CallbackQuery) -> None:
     turns = got[1] if got else 0
     status = await get_nn_status(force=True)
     text = await _coach_home_text(status, turns=turns)
-    kb = coach_menu_kb(online=status == NnStatus.online, turns=turns)
+    kb = _menu_kb(online=status == NnStatus.online, turns=turns)
     try:
         await callback.message.edit_text(text, reply_markup=kb)
         await callback.answer(f"Статус: {status_label(status)}")
@@ -156,13 +177,19 @@ async def coach_clear_ok(callback: CallbackQuery) -> None:
     await callback.message.edit_text(
         f"Диалог очищен ({deleted} реплик).\n\n"
         + await _coach_home_text(status, turns=0),
-        reply_markup=coach_menu_kb(online=status == NnStatus.online, turns=0),
+        reply_markup=_menu_kb(online=status == NnStatus.online, turns=0),
     )
     await callback.answer("Очищено")
 
 
 async def _start_kind(callback: CallbackQuery, kind: str) -> None:
     if callback.from_user is None or callback.message is None:
+        return
+    if not _profile_on():
+        await callback.answer(
+            "Личные разборы пока выключены (экономия квоты)",
+            show_alert=True,
+        )
         return
     status = await get_nn_status(force=True)
     if status != NnStatus.online:
@@ -172,7 +199,7 @@ async def _start_kind(callback: CallbackQuery, kind: str) -> None:
         turns = got[1] if got else 0
         await callback.message.edit_text(
             await _coach_home_text(status, turns=turns),
-            reply_markup=coach_menu_kb(online=False, turns=turns),
+            reply_markup=_menu_kb(online=False, turns=turns),
         )
         await callback.answer("Нейросеть недоступна", show_alert=True)
         return
@@ -186,7 +213,7 @@ async def _start_kind(callback: CallbackQuery, kind: str) -> None:
         user_id = user.id
 
     await callback.message.edit_text(
-        f"{ui.ICO_NN} Готовлю разбор ({kind})… Это может занять до пары минут."
+        f"{ui.ICO_NN} Готовлю разбор ({kind})…"
     )
     await callback.answer()
     asyncio.create_task(
@@ -221,6 +248,12 @@ async def _exercise_items(user_id: int) -> list[tuple[int, str]]:
 async def coach_ex_list(callback: CallbackQuery) -> None:
     if callback.from_user is None or callback.message is None or callback.data is None:
         return
+    if not _profile_on():
+        await callback.answer(
+            "Личные разборы пока выключены (экономия квоты)",
+            show_alert=True,
+        )
+        return
     status = await get_nn_status()
     if status != NnStatus.online:
         got = await _user_and_turns(
@@ -229,7 +262,7 @@ async def coach_ex_list(callback: CallbackQuery) -> None:
         turns = got[1] if got else 0
         await callback.message.edit_text(
             await _coach_home_text(status, turns=turns),
-            reply_markup=coach_menu_kb(online=False, turns=turns),
+            reply_markup=_menu_kb(online=False, turns=turns),
         )
         await callback.answer("Нейросеть недоступна", show_alert=True)
         return
@@ -257,7 +290,7 @@ async def coach_ex_list(callback: CallbackQuery) -> None:
             f"завершённых тренировок (как в «{ui.BTN_HISTORY}»).\n\n"
             f"Дологируй подходы и нажми «{ui.BTN_FINISH_WORKOUT}». "
             "Отмена и сброс не считаются.",
-            reply_markup=coach_menu_kb(online=True),
+            reply_markup=_menu_kb(online=True),
         )
         await callback.answer()
         return
@@ -274,6 +307,12 @@ async def coach_ex_list(callback: CallbackQuery) -> None:
 async def coach_exercise(callback: CallbackQuery) -> None:
     if callback.from_user is None or callback.message is None or callback.data is None:
         return
+    if not _profile_on():
+        await callback.answer(
+            "Личные разборы пока выключены (экономия квоты)",
+            show_alert=True,
+        )
+        return
     try:
         ex_id = int(callback.data.split(":")[-1])
     except ValueError:
@@ -288,7 +327,7 @@ async def coach_exercise(callback: CallbackQuery) -> None:
         turns = got[1] if got else 0
         await callback.message.edit_text(
             await _coach_home_text(status, turns=turns),
-            reply_markup=coach_menu_kb(online=False, turns=turns),
+            reply_markup=_menu_kb(online=False, turns=turns),
         )
         await callback.answer("Нейросеть недоступна", show_alert=True)
         return
@@ -305,7 +344,7 @@ async def coach_exercise(callback: CallbackQuery) -> None:
     name = next((n for i, n in items if i == ex_id), f"#{ex_id}")
 
     await callback.message.edit_text(
-        f"{ui.ICO_NN} Совет по «{name}»… Это может занять до пары минут."
+        f"{ui.ICO_NN} Совет по «{name}»…"
     )
     await callback.answer()
     asyncio.create_task(

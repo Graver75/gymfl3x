@@ -1569,73 +1569,91 @@ def _format_nn_load(data: dict | None) -> str:
     if not data:
         return (
             f"{ui.BTN_ADM_NN_LOAD}\n"
-            "Нейросеть недоступна (офлайн / выключена).\n"
+            "Коуч недоступен (выключен / нет ключа / ошибка).\n"
             "Запросы пользователей не принимаются."
         )
-    active = data.get("active") or []
-    queued = data.get("queued") or []
-    history = data.get("history") or []
-    status_ru = {
-        "ok": "ok",
-        "error": "ошибка",
-        "cancelled": "отменён",
-        "running": "идёт",
-        "queued": "очередь",
-    }
+
+    status = data.get("status") or "?"
+    key_ok = "да" if data.get("key_configured") else "нет"
+    rpd_lim = data.get("rpd_limit", "?")
+    rpm_lim = data.get("rpm_limit", "?")
+    day_req = data.get("day_req", 0)
+    rpm = data.get("rpm", 0)
+    tok_in = data.get("day_tok_in", 0)
+    tok_out = data.get("day_tok_out", 0)
+    by_kind = data.get("by_kind") or {}
+    kind_s = " · ".join(f"{k}={v}" for k, v in sorted(by_kind.items())) or "—"
+    last_429 = data.get("last_429")
+    if last_429:
+        q = last_429.get("quota_id") or "?"
+        qv = last_429.get("quota_value") or "?"
+        last_429_s = f"{q}={qv}"
+    else:
+        last_429_s = "—"
+
+    plabel = data.get("provider_label") or data.get("provider") or "?"
     lines = [
         f"{ui.BTN_ADM_NN_LOAD}",
-        f"Модель: {data.get('model', '?')}",
-        f"Параллельно макс.: {data.get('max_concurrent', '?')}",
-        f"Сейчас: {data.get('active_count', 0)} активных, "
-        f"{data.get('queued_count', 0)} в очереди",
-        f"Завершено всего: {data.get('completed_total', 0)}, "
-        f"ошибок: {data.get('failed_total', 0)}",
+        f"Активный: {plabel} · модель: {data.get('model', '?')}",
+        f"Статус: {status} · ключ: {key_ok}",
         "",
     ]
-    if active:
-        lines.append("Активные:")
-        for j in active:
-            who = j.get("user_label") or (f"id={j.get('user_id')}" if j.get("user_id") else "?")
-            lines.append(
-                f"• {who} — {j.get('kind')} · {status_ru.get(j.get('status'), j.get('status'))} "
-                f"· {j.get('running_sec', 0)}с"
-            )
-        lines.append("")
-    else:
-        lines.append("Активных запросов нет.\n")
-    if queued:
-        lines.append("Очередь:")
-        for j in queued:
-            who = j.get("user_label") or (f"id={j.get('user_id')}" if j.get("user_id") else "?")
-            lines.append(
-                f"• {who} — {j.get('kind')} · ждёт {j.get('waiting_sec', 0)}с"
-            )
-        lines.append("")
-    else:
-        lines.append("Очередь пуста.\n")
 
-    lines.append(f"История (последние {min(15, len(history))}/{data.get('history_limit', '?')}):")
+    providers = data.get("providers") or []
+    if providers:
+        lines.append("Провайдеры:")
+        for p in providers:
+            mark = "●" if p.get("active") else "○"
+            if not p.get("configured"):
+                st = "нет ключа"
+            elif p.get("online"):
+                st = "online"
+            else:
+                st = "offline"
+            lines.append(
+                f"{mark} {p.get('label')} ({p.get('model')}) — {st}"
+            )
+        lines.append("")
+
+    lines.extend(
+        [
+            f"Сегодня (PT / soft RPD): {day_req} / {rpd_lim} req"
+            f" · {tok_in} tok in · {tok_out} tok out",
+            f"Последняя минута: {rpm} / {rpm_lim} req",
+            f"По типам сегодня: {kind_s}",
+            f"Ошибки 429 сегодня: {data.get('day_429', 0)}",
+            f"Последний 429: {last_429_s}",
+            "",
+            "История (последние 15):",
+        ]
+    )
+    history = data.get("history") or []
     if not history:
         lines.append("• пока пусто")
     else:
         for h in history[:15]:
-            who = h.get("user_label") or (f"id={h.get('user_id')}" if h.get("user_id") else "?")
-            st = status_ru.get(h.get("status"), h.get("status"))
-            when = str(h.get("finished_at") or "")[-8:]  # HH:MM:SS from ISO if possible
-            if "T" in str(h.get("finished_at") or ""):
-                when = str(h["finished_at"]).split("T", 1)[1].replace("Z", "")[:8]
-            line = (
-                f"• {when} {who} — {h.get('kind')} · {st} · {h.get('duration_sec', 0)}с"
+            who = h.get("user_label") or (
+                f"id={h.get('user_id')}" if h.get("user_id") else "?"
             )
-            if h.get("status") == "error" and h.get("error"):
+            when = str(h.get("finished_at") or "")
+            if "T" in when:
+                when = when.split("T", 1)[1].replace("Z", "")[:8]
+            else:
+                when = when[-8:] if when else "??:??:??"
+            toks = int(h.get("prompt_tokens") or 0) + int(h.get("output_tokens") or 0)
+            prov = h.get("provider") or "?"
+            line = (
+                f"• {when} [{prov}] {who} — {h.get('kind')} · {h.get('status')} "
+                f"· {h.get('duration_sec', 0)}с · {toks}tok"
+            )
+            if h.get("status") != "ok" and h.get("error"):
                 err = str(h["error"]).replace("\n", " ")[:60]
                 line += f"\n  ↳ {err}"
             lines.append(line)
 
     lines.append("")
     lines.append(
-        "Несколько пользователей могут слать запросы одновременно — "
-        "лишние ждут в очереди, пока освободится слот."
+        "Переключение ниже. Soft-лимиты — учёт бота; у Gemini точный остаток в AI Studio."
     )
     text = "\n".join(lines)
     if len(text) > 3900:
@@ -1653,6 +1671,7 @@ async def adm_nn_load(callback: CallbackQuery) -> None:
         return
     from aiogram.exceptions import TelegramBadRequest
 
+    from app.keyboards import admin_nn_load_kb
     from app.services.nn_client import (
         fetch_nn_load,
         get_nn_status,
@@ -1663,11 +1682,57 @@ async def adm_nn_load(callback: CallbackQuery) -> None:
     await get_nn_status(force=True)
     data = await fetch_nn_load()
     text = _format_nn_load(data)
+    providers = (data or {}).get("providers") or []
     try:
-        await callback.message.edit_text(text, reply_markup=admin_nn_load_kb())
+        await callback.message.edit_text(
+            text, reply_markup=admin_nn_load_kb(providers=providers)
+        )
         await callback.answer("Обновлено")
     except TelegramBadRequest as exc:
         if "message is not modified" in str(exc):
             await callback.answer("Без изменений")
         else:
             raise
+
+
+@router.callback_query(F.data.startswith("adm:nnprov:"))
+async def adm_nn_set_provider(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    user = await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin")
+    if not user:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    pid = callback.data.split(":")[-1].strip().lower()
+    from app.db.session import SessionLocal
+    from app.keyboards import admin_nn_load_kb
+    from app.services.llm_providers import (
+        get_provider_spec,
+        provider_configured,
+        set_active_provider,
+    )
+    from app.services.nn_client import fetch_nn_load, invalidate_status_cache
+
+    spec = get_provider_spec(pid)
+    if spec is None:
+        await callback.answer("Неизвестный провайдер", show_alert=True)
+        return
+    if not provider_configured(spec):
+        await callback.answer(
+            f"Нет ключа для {spec.label} — добавь в .env",
+            show_alert=True,
+        )
+        return
+    async with SessionLocal() as session:
+        ok = await set_active_provider(session, pid)
+    if not ok:
+        await callback.answer("Не удалось переключить", show_alert=True)
+        return
+    invalidate_status_cache()
+    data = await fetch_nn_load()
+    text = _format_nn_load(data)
+    providers = (data or {}).get("providers") or []
+    await callback.message.edit_text(
+        text, reply_markup=admin_nn_load_kb(providers=providers)
+    )
+    await callback.answer(f"Активен: {spec.label}")

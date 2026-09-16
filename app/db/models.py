@@ -324,3 +324,34 @@ class NnDialogMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     user: Mapped[User] = relationship(back_populates="nn_dialog_messages")
+
+
+class CoachUsageLog(Base):
+    """Local LLM call accounting for admin quota display."""
+
+    __tablename__ = "coach_usage_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    status: Mapped[str] = mapped_column(String(16))  # ok | error | 429
+    provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    user_label: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    duration_sec: Mapped[float] = mapped_column(Float, default=0.0)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quota_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    quota_value: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
+class AppSetting(Base):
+    """Simple key/value settings (e.g. active coach LLM provider)."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")

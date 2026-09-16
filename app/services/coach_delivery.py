@@ -12,11 +12,17 @@ from aiogram.types import Message
 from app import ui_copy as ui
 from app.db.session import SessionLocal
 from app.services.coach_context import build_coach_context
-from app.services.nn_client import NnStatus, fetch_nn_meta, get_nn_status, request_coach, status_label
+from app.services.nn_client import (
+    NnStatus,
+    fetch_nn_meta,
+    get_nn_status,
+    request_coach,
+    status_label,
+)
 from app.services.nn_dialog import (
     append_dialog_turn,
-    load_dialog_history,
     history_for_api,
+    load_dialog_history,
 )
 
 logger = logging.getLogger("gymflex.coach")
@@ -31,9 +37,11 @@ async def format_prompt_info_text(*, turns: int = 0) -> str:
     system = str(meta.get("system_prompt") or "").strip()
     schema = str(meta.get("data_schema_ru") or "").strip()
     model = meta.get("model") or "?"
+    provider = meta.get("provider") or "?"
     parts = [
         f"{ui.ICO_NN} <b>Что уходит в нейросеть</b>",
-        f"Модель: <code>{html.escape(str(model))}</code>",
+        f"Провайдер: <code>{html.escape(str(provider))}</code> · "
+        f"модель: <code>{html.escape(str(model))}</code>",
         f"Реплик в вашем диалоге: {turns} (без системного промпта)",
         "",
         "<b>Системный промпт</b> (всегда первый, общий для коуча):",
@@ -68,7 +76,7 @@ async def run_coach_and_reply(
         if status != NnStatus.online:
             text = (
                 f"{format_nn_status_line(status)}\n"
-                "Разбор недоступен — сервис не запущен или выключен."
+                "Разбор недоступен — коуч выключен, нет ключа, офлайн или квота."
             )
             if waiting_message is not None:
                 await waiting_message.edit_text(text)
@@ -78,7 +86,7 @@ async def run_coach_and_reply(
 
         if waiting_message is None:
             waiting_message = await bot.send_message(
-                chat_id, f"{ui.ICO_NN} Готовлю разбор… Это может занять до пары минут."
+                chat_id, f"{ui.ICO_NN} Готовлю разбор…"
             )
 
         async with SessionLocal() as session:
@@ -95,7 +103,10 @@ async def run_coach_and_reply(
                 await waiting_message.edit_text("Не удалось собрать данные для разбора.")
                 return
 
-            history = await load_dialog_history(session, user_id)
+            if kind == "session":
+                history: list = []
+            else:
+                history = history_for_api(await load_dialog_history(session, user_id))
             focus: dict[str, Any] = {
                 "session_id": focus_session_id,
                 "exercise_id": focus_exercise_id,
@@ -110,17 +121,16 @@ async def run_coach_and_reply(
             kind=kind,
             athlete=athlete,
             focus=focus,
-            history=history_for_api(history),
+            history=history,
             user_id=user_id,
             user_label=user_label,
         )
         if not raw:
             await waiting_message.edit_text(
-                f"{ui.ICO_NN} Не удалось получить разбор (таймаут или сервис недоступен)."
+                f"{ui.ICO_NN} Не удалось получить разбор (таймаут, квота или провайдер)."
             )
             return
 
-        # Persist turn: store a short user summary + full assistant reply
         user_summary = (
             f"[разбор:{kind}] focus={focus} "
             f"sessions={len((athlete.get('sessions') or []))} "
@@ -130,8 +140,6 @@ async def run_coach_and_reply(
             await append_dialog_turn(
                 session, user_id, role="user", content=user_summary, kind=kind
             )
-            # Also keep a compact copy of what was asked (without huge JSON) —
-            # the next call rebuilds fresh athlete JSON; history is conversational.
             await append_dialog_turn(
                 session, user_id, role="assistant", content=raw, kind=kind
             )

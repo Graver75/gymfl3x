@@ -769,6 +769,9 @@ async def workout_live_coach(callback: CallbackQuery, state: FSMContext) -> None
         await callback.answer("Нейросеть недоступна", show_alert=True)
         return
 
+    from app.services.nn_client import live_cooldown_remaining
+
+    # Cooldown uses DB user id — resolve after we have user
     data = await state.get_data()
     screen = "weight"
     if current == WorkoutSG.reps.state:
@@ -782,6 +785,13 @@ async def workout_live_coach(callback: CallbackQuery, state: FSMContext) -> None
             callback.from_user.id,
             callback.from_user.full_name or "Athlete",
         )
+        left = live_cooldown_remaining(user.id)
+        if left > 0:
+            await callback.answer(
+                f"Подожди ещё {int(left)}с перед следующим советом",
+                show_alert=True,
+            )
+            return
         exercise = await resolve_exercise(session, data)
         if not exercise:
             await callback.answer(
@@ -845,7 +855,7 @@ async def workout_live_coach(callback: CallbackQuery, state: FSMContext) -> None
     await callback.answer()
     waiting = await callback.message.answer(
         f"{ui.ICO_NN} Совет по «{ui.esc(name)}», подход "
-        f"{ui.b(str(live['current_set']))}… Это может занять до пары минут.\n"
+        f"{ui.b(str(live['current_set']))}…\n"
         "Можно продолжать лог — ответ придёт отдельным сообщением."
     )
     asyncio.create_task(

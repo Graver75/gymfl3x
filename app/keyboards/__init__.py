@@ -496,13 +496,30 @@ def admin_level_detail_kb(std_id: int, *, mode: str) -> InlineKeyboardMarkup:
     )
 
 
-def admin_nn_load_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Обновить", callback_data="adm:nnload")],
-            [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:home")],
-        ]
+def admin_nn_load_kb(
+    providers: list[dict] | None = None,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for p in providers or []:
+        if not p.get("configured"):
+            continue
+        label = p.get("label") or p.get("id") or "?"
+        if p.get("active"):
+            text = f"✓ {label}"
+        else:
+            text = f"→ {label}"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=text, callback_data=f"adm:nnprov:{p.get('id')}"
+                )
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text="🔄 Обновить / проверить", callback_data="adm:nnload")]
     )
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def current_exercises_kb(items: list[tuple], *, page: int = 0) -> InlineKeyboardMarkup:
@@ -914,9 +931,11 @@ def history_back_kb(to: str = "hist:home") -> InlineKeyboardMarkup:
     )
 
 
-def coach_menu_kb(*, online: bool, turns: int = 0) -> InlineKeyboardMarkup:
+def coach_menu_kb(
+    *, online: bool, turns: int = 0, profile_enabled: bool = False
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    if online:
+    if online and profile_enabled:
         rows.extend(
             [
                 [InlineKeyboardButton(text=ui.BTN_COACH_WEEK, callback_data="coach:week")],
