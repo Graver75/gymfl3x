@@ -35,8 +35,8 @@ logger = logging.getLogger("gymflex.ai_digests")
 
 
 def _dest(user: User) -> str:
-    d = (getattr(user, "ai_dest", None) or "dm").strip().lower()
-    return d if d in {"dm", "group", "both"} else "dm"
+    d = (getattr(user, "ai_dest", None) or "both").strip().lower()
+    return d if d in {"dm", "group", "both"} else "both"
 
 
 def wants_session_dm(user: User) -> bool:
@@ -54,14 +54,14 @@ def wants_session_group(user: User) -> bool:
 
 
 def wants_week_dm(user: User) -> bool:
-    return bool(getattr(user, "ai_week_enabled", False)) and _dest(user) in {
+    return bool(getattr(user, "ai_week_enabled", True)) and _dest(user) in {
         "dm",
         "both",
     }
 
 
 def wants_week_group(user: User) -> bool:
-    return bool(getattr(user, "ai_week_enabled", False)) and _dest(user) in {
+    return bool(getattr(user, "ai_week_enabled", True)) and _dest(user) in {
         "group",
         "both",
     }

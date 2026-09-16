@@ -73,8 +73,8 @@ def _profile_text(user, *, nn_line: str | None = None) -> str:
     if nn_line:
         lines.append(nn_line)
     sess = bool(getattr(user, "ai_session_enabled", True))
-    week = bool(getattr(user, "ai_week_enabled", False))
-    dest = getattr(user, "ai_dest", None) or "dm"
+    week = bool(getattr(user, "ai_week_enabled", True))
+    dest = getattr(user, "ai_dest", None) or "both"
     dest_label = ui.AI_DEST_LABELS.get(dest, dest)
     lines.append(
         f"ИИ: тренировка {'вкл' if sess else 'выкл'} · "
@@ -85,8 +85,8 @@ def _profile_text(user, *, nn_line: str | None = None) -> str:
 
 def _ai_settings_text(user) -> str:
     sess = bool(getattr(user, "ai_session_enabled", True))
-    week = bool(getattr(user, "ai_week_enabled", False))
-    dest = getattr(user, "ai_dest", None) or "dm"
+    week = bool(getattr(user, "ai_week_enabled", True))
+    dest = getattr(user, "ai_dest", None) or "both"
     return (
         f"{ui.BTN_PROFILE_AI}\n\n"
         f"Разбор тренировки (после зала): {'вкл' if sess else 'выкл'}\n"
@@ -278,8 +278,8 @@ async def profile_ai_menu(callback: CallbackQuery) -> None:
             return
         text = _ai_settings_text(user)
         sess = bool(getattr(user, "ai_session_enabled", True))
-        week = bool(getattr(user, "ai_week_enabled", False))
-        dest = getattr(user, "ai_dest", None) or "dm"
+        week = bool(getattr(user, "ai_week_enabled", True))
+        dest = getattr(user, "ai_dest", None) or "both"
     await callback.message.edit_text(
         text, reply_markup=profile_ai_kb(session_on=sess, week_on=week, dest=dest)
     )
@@ -300,8 +300,8 @@ async def profile_ai_toggle_session(callback: CallbackQuery) -> None:
         await session.commit()
         text = _ai_settings_text(user)
         sess = bool(user.ai_session_enabled)
-        week = bool(getattr(user, "ai_week_enabled", False))
-        dest = getattr(user, "ai_dest", None) or "dm"
+        week = bool(getattr(user, "ai_week_enabled", True))
+        dest = getattr(user, "ai_dest", None) or "both"
     await callback.message.edit_text(
         text, reply_markup=profile_ai_kb(session_on=sess, week_on=week, dest=dest)
     )
@@ -318,12 +318,12 @@ async def profile_ai_toggle_week(callback: CallbackQuery) -> None:
             callback.from_user.id,
             callback.from_user.full_name or "Athlete",
         )
-        user.ai_week_enabled = not bool(getattr(user, "ai_week_enabled", False))
+        user.ai_week_enabled = not bool(getattr(user, "ai_week_enabled", True))
         await session.commit()
         text = _ai_settings_text(user)
         sess = bool(getattr(user, "ai_session_enabled", True))
         week = bool(user.ai_week_enabled)
-        dest = getattr(user, "ai_dest", None) or "dm"
+        dest = getattr(user, "ai_dest", None) or "both"
     await callback.message.edit_text(
         text, reply_markup=profile_ai_kb(session_on=sess, week_on=week, dest=dest)
     )
@@ -348,7 +348,7 @@ async def profile_ai_set_dest(callback: CallbackQuery) -> None:
         await session.commit()
         text = _ai_settings_text(user)
         sess = bool(getattr(user, "ai_session_enabled", True))
-        week = bool(getattr(user, "ai_week_enabled", False))
+        week = bool(getattr(user, "ai_week_enabled", True))
     await callback.message.edit_text(
         text, reply_markup=profile_ai_kb(session_on=sess, week_on=week, dest=dest)
     )

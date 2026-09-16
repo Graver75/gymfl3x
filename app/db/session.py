@@ -59,11 +59,30 @@ async def _add_missing_columns(conn) -> None:
         )
     if "ai_week_enabled" not in cols:
         await conn.execute(
-            text("ALTER TABLE users ADD COLUMN ai_week_enabled BOOLEAN DEFAULT 0")
+            text("ALTER TABLE users ADD COLUMN ai_week_enabled BOOLEAN DEFAULT 1")
         )
+    else:
+        # Column existed with old DEFAULT 0 — bump SQLite default is a no-op; backfill below
+        pass
     if "ai_dest" not in cols:
         await conn.execute(
-            text("ALTER TABLE users ADD COLUMN ai_dest VARCHAR(16) DEFAULT 'dm'")
+            text("ALTER TABLE users ADD COLUMN ai_dest VARCHAR(16) DEFAULT 'both'")
+        )
+    # One-shot backfill to new product defaults (flag in app_settings)
+    flag = await conn.execute(
+        text("SELECT value FROM app_settings WHERE key = 'ai_prefs_default_both_v1'")
+    )
+    if flag.fetchone() is None:
+        await conn.execute(
+            text(
+                "UPDATE users SET ai_session_enabled = 1, ai_week_enabled = 1, ai_dest = 'both'"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT OR REPLACE INTO app_settings (key, value) "
+                "VALUES ('ai_prefs_default_both_v1', '1')"
+            )
         )
 
     result = await conn.execute(text("PRAGMA table_info(group_chat)"))

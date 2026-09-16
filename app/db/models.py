@@ -77,8 +77,8 @@ class User(Base):
     onboarding_done: Mapped[bool] = mapped_column(Boolean, default=False)
     # AI digest prefs: session after workout / weekly; dest dm|group|both
     ai_session_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    ai_week_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    ai_dest: Mapped[str] = mapped_column(String(16), default="dm")  # dm | group | both
+    ai_week_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    ai_dest: Mapped[str] = mapped_column(String(16), default="both")  # dm | group | both
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     exercise_states: Mapped[list[UserExerciseState]] = relationship(back_populates="user")

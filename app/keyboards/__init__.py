@@ -117,7 +117,7 @@ def profile_ai_kb(
     week_on: bool,
     dest: str,
 ) -> InlineKeyboardMarkup:
-    dest = dest if dest in {"dm", "group", "both"} else "dm"
+    dest = dest if dest in {"dm", "group", "both"} else "both"
     s_mark = "✓ " if session_on else ""
     w_mark = "✓ " if week_on else ""
     rows = [
