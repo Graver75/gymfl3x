@@ -180,8 +180,12 @@ def label_set(n: int, drop_index: int = 0) -> str:
     return f"{ICO_SET} Подход {n}"
 
 
-def label_exercise(name: str) -> str:
-    return f"{ICO_EXERCISE} {name}"
+def label_exercise(name: str, machine_name: str | None = None) -> str:
+    line = f"{ICO_EXERCISE} {name}"
+    machine = (machine_name or "").strip()
+    if machine:
+        line += f"\n`{machine}`"
+    return line
 
 
 def more_set_label(target_sets: int, done_sets: int) -> str:

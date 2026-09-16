@@ -19,6 +19,8 @@ SYSTEM_PROMPT = """Ты — Бендер: жёсткий, язвительный
 По цифрам (веса, даты, подходы, чекины) опирайся ТОЛЬКО на JSON — не выдумывай.
 Данные передаются ОДИН раз в JSON; смотри по путям (athlete.live, sessions, athletes).
 Можно кратко дать cues по технике по названию упражнения и machine_name / m (тренажёр), если указан (live_set / exercise).
+В JSON НЕТ секунд отдыха между подходами — не ссылайся на «факт отдыха из данных».
+Но в советах МОЖНО и НУЖНО рекомендовать отдых (например «90–120 с между подходами») как тренерский ориентир.
 Не ставь медицинских диагнозов и не назначай лечение.
 Не приказывай менять программу целиком — только наблюдения, оценки и мягкие/жёсткие советы по нагрузке.
 НЕ используй и НЕ выдумывай шкалы/уровни силы (Новичок, Ростки, Профи и т.п.) — их нет в данных и они ошибочны.
@@ -30,11 +32,12 @@ SYSTEM_PROMPT = """Ты — Бендер: жёсткий, язвительный
 DATA_SCHEMA_RU = """Компактный JSON (без дублей):
 • user — фаза прогрессии, лог, вес, стаж, возраст, код (без уровней силы)
 • adherence / aggregates / body_weight_series — week/month/session (в live_set обычно нет)
-• notes, exercise_state (поле m = тренажёр), sessions (в сетах m = тренажёр)
+• notes, exercise_state (поле m = тренажёр), sessions (в сетах m = тренажёр; без rest_sec)
 • live — только live_set (machine_name; week_plan текущего упражнения если есть)
 • focus — ids цели + machine_name
 • target_exercises — только week_plan: упражнения на целевую неделю
-• athletes — только session_group / week_group: несколько атлетов с кодами"""
+• athletes — только session_group / week_group: несколько атлетов с кодами
+• отдыха между подходами в данных нет — рекомендуй отдых сам в тексте совета"""
 
 DEFAULT_TASKS: dict[str, str] = {
     "session": (
@@ -82,11 +85,12 @@ DEFAULT_TASKS: dict[str, str] = {
         "\"sets\":[{\"n\":int,\"kg\":number,\"reps\":int,\"rpe\":int}]}]}.\n"
         "Покрывай ВСЕ exercise_id из target_exercises. Число подходов ≈ target_sets.\n"
         "advice: стиль Бендера (едкий, язвительный) — РОВНО 3–4 предложения; "
-        "объясни ПОЧЕМУ такие kg/reps/rpe + короткий рабочий акцент "
-        "(техника/темп/отдых); ОБЯЗАТЕЛЬНАЯ согласованность с sets[] "
+        "объясни ПОЧЕМУ такие kg/reps/rpe + рабочий акцент "
+        "(техника/темп/отдых между подходами — рекомендуй секунды сам, "
+        "в данных rest_sec нет); ОБЯЗАТЕЛЬНАЯ согласованность с sets[] "
         "(нельзя «полная жесть» при низком RPE и наоборот); "
-        "если называешь цифры — только те же, что в sets.\n"
-        "Цифры только из JSON. Без уровней силы."
+        "если называешь цифры kg/reps/rpe — только те же, что в sets.\n"
+        "Цифры нагрузки только из JSON. Без уровней силы."
     ),
     "month": (
         "Разбор за примерно месяц. Стиль Бендера, но без воды: "
@@ -96,8 +100,9 @@ DEFAULT_TASKS: dict[str, str] = {
     "exercise": (
         "Структура: (1) техника по athlete.focus.exercise_name "
         "(учти machine_name / m — конкретный тренажёр) — 3–5 cues; "
-        "(2) summary: история, веса, exercise_state; мягкий/едкий совет. "
-        "Без уровней силы. Цифры только из JSON."
+        "(2) summary: история, веса, exercise_state; мягкий/едкий совет; "
+        "по желанию рекомендуй отдых между подходами (в данных его нет).\n"
+        "Без уровней силы. Цифры нагрузки только из JSON."
     ),
     "live_set": (
         "Атлет СЕЙЧАС в зале. Смотри athlete.live (machine_name, logged_sets, "
@@ -106,8 +111,10 @@ DEFAULT_TASKS: dict[str, str] = {
         "текст live.week_plan.advice; не дублируй те же формулировки.\n"
         "(1) техника 3–5 cues на ЭТОТ подход сейчас (тренажёр учти); "
         "(2) корректировка по уже залогированным сетам сессии; "
+        "(3) при необходимости дай ориентир по отдыху до следующего подхода "
+        "(секунд в JSON нет — рекомендуй сам).\n"
         "цифры плана (kg/reps/rpe) можно кратко опереться, без повтора advice.\n"
-        "Без уровней силы. 6–8 предложений. Цифры только из JSON."
+        "Без уровней силы. 6–8 предложений. Цифры нагрузки только из JSON."
     ),
 }
 
@@ -184,10 +191,14 @@ def list_prompt_catalog() -> list[tuple[str, str, str]]:
 
 
 PROMPT_SEED_FLAGS: dict[str, tuple[str, str]] = {
-    # flag_key -> (setting_key, task kind)
+    # flag_key -> (setting_key, task kind | "__system__")
     "week_group_prompt_v2": (f"{SETTING_PREFIX}week_group", "week_group"),
     "live_set_prompt_nodup_v1": (f"{SETTING_PREFIX}live_set", "live_set"),
     "week_plan_prompt_v1": (f"{SETTING_PREFIX}week_plan", "week_plan"),
+    "live_set_prompt_rest_advice_v1": (f"{SETTING_PREFIX}live_set", "live_set"),
+    "week_plan_prompt_rest_advice_v1": (f"{SETTING_PREFIX}week_plan", "week_plan"),
+    "exercise_prompt_rest_advice_v1": (f"{SETTING_PREFIX}exercise", "exercise"),
+    "system_prompt_rest_advice_v1": (SETTING_SYSTEM, "__system__"),
 }
 
 
@@ -197,7 +208,7 @@ async def ensure_prompt_seeds(session: AsyncSession) -> None:
         row = await session.get(AppSetting, flag)
         if row is not None:
             continue
-        body = DEFAULT_TASKS[kind]
+        body = SYSTEM_PROMPT if kind == "__system__" else DEFAULT_TASKS[kind]
         existing = await session.get(AppSetting, setting_key)
         if existing is None:
             session.add(AppSetting(key=setting_key, value=body))

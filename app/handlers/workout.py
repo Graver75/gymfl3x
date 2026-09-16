@@ -177,6 +177,15 @@ def _set_prompt(data: dict) -> str:
     return ui.label_set(set_no, drop)
 
 
+def _ex_title(name: str, data: dict | None = None, exercise=None) -> str:
+    machine = None
+    if exercise is not None:
+        machine = getattr(exercise, "machine_name", None)
+    if not machine and data:
+        machine = data.get("machine_name")
+    return ui.label_exercise(name, machine)
+
+
 async def _apply_week_plan_to_state(
     state: FSMContext,
     *,
@@ -612,6 +621,7 @@ async def workout_arch_pick(callback: CallbackQuery, state: FSMContext) -> None:
             "target_reps_min": item.target_reps_min,
             "target_reps_max": item.target_reps_max,
             "weight_step": item.weight_step,
+            "machine_name": getattr(item, "machine_name", None),
         }
         await state.update_data(
             session_id=ws.id,
@@ -624,6 +634,7 @@ async def workout_arch_pick(callback: CallbackQuery, state: FSMContext) -> None:
             current_set=1,
             drop_index=0,
             last_action_at=touch_action_iso(),
+            machine_name=getattr(item, "machine_name", None),
         )
         user_id = user.id
         exercise_name = item.name
@@ -647,7 +658,7 @@ async def workout_arch_pick(callback: CallbackQuery, state: FSMContext) -> None:
         kb = await _weight_kb_from_data(exercise, None, data)
     target = f"{free['target_sets']}×{free['target_reps_min']}-{free['target_reps_max']}"
     await callback.message.edit_text(
-        f"{ui.label_exercise(exercise_name)}\n{ui.label_target(target)}{loaded['hint']}"
+        f"{_ex_title(exercise_name, data)}\n{ui.label_target(target)}{loaded['hint']}"
         f"{rest_line(data)}\n\n{_set_prompt(data)}\nВыбери вес или напиши число:",
         reply_markup=kb,
     )
@@ -709,6 +720,7 @@ async def pick_exercise(callback: CallbackQuery, state: FSMContext) -> None:
         current_set=next_set,
         drop_index=0,
         last_action_at=touch_action_iso(),
+        machine_name=getattr(exercise, "machine_name", None) if exercise else None,
     )
     loaded = await _load_presets_into_state(
         state,
@@ -747,7 +759,7 @@ async def pick_exercise(callback: CallbackQuery, state: FSMContext) -> None:
     if plan_html:
         extra += f"\n\n{plan_html}"
     await callback.message.edit_text(
-        f"{ui.label_exercise(exercise.name)}\n{ui.label_target(target)}{loaded['hint']}{extra}"
+        f"{_ex_title(exercise.name, data, exercise)}\n{ui.label_target(target)}{loaded['hint']}{extra}"
         f"{rest_line(data)}\n\n{_set_prompt(data)}\nВыбери вес или напиши число:",
         reply_markup=kb,
     )
@@ -1001,7 +1013,7 @@ async def pick_weight(callback: CallbackQuery, state: FSMContext) -> None:
             await state.set_state(WorkoutSG.reps)
             last_reps = ex_state.last_reps if ex_state else None
             await callback.message.edit_text(
-                f"{ui.label_exercise(exercise.name)}\n{_set_prompt(data)}\nВес: {draft:g} кг"
+                f"{_ex_title(exercise.name, data, exercise)}\n{_set_prompt(data)}\nВес: {draft:g} кг"
                 f"{rest_line(data)}\nСколько повторений? (или напиши число)",
                 reply_markup=await _reps_kb_from_data(exercise, data, last_reps),
             )
@@ -1184,7 +1196,7 @@ async def _show_after_set(target: Message, state: FSMContext, *, edit: bool = Fa
         name = exercise.name if exercise else "Упражнение"
 
     text = (
-        f"{ui.label_exercise(name)}\n{format_logged_parts(logged)}"
+        f"{_ex_title(name, data)}\n{format_logged_parts(logged)}"
         f"{rest_line(data)}\n\nЧто дальше?"
     )
     kb = await _after_set_kb(target_sets, _unique_set_count(logged))
@@ -1280,7 +1292,7 @@ async def next_set(callback: CallbackQuery, state: FSMContext) -> None:
 
     plan_bit = f"\n\n{plan_html}" if plan_html else ""
     await callback.message.edit_text(
-        f"{ui.label_exercise(name)}\n{format_logged_parts(logged)}{plan_bit}\n\n{_set_prompt(data)}"
+        f"{_ex_title(name, data)}\n{format_logged_parts(logged)}{plan_bit}\n\n{_set_prompt(data)}"
         f"{rest_line(data)}\nВыбери вес или напиши число:",
         reply_markup=kb,
     )
@@ -1356,7 +1368,7 @@ async def drop_set(callback: CallbackQuery, state: FSMContext) -> None:
         kb = await _weight_kb_from_data(exercise, ex_state, data)
 
     await callback.message.edit_text(
-        f"{ui.label_exercise(name)}\n{format_logged_parts(logged)}\n\n{_set_prompt(data)}"
+        f"{_ex_title(name, data)}\n{format_logged_parts(logged)}\n\n{_set_prompt(data)}"
         f"{rest_line(data)}\nДроп — выбери вес или напиши число:",
         reply_markup=kb,
     )
@@ -1393,7 +1405,7 @@ async def undo_segment(callback: CallbackQuery, state: FSMContext) -> None:
             data = await state.get_data()
             kb = await _weight_kb_from_data(exercise, ex_state, data, float(last["weight"]))
         await callback.message.edit_text(
-            f"{ui.label_exercise(exercise.name)}\n{_set_prompt(data)}{rest_line(data)}\nВыбери вес или напиши число:",
+            f"{_ex_title(exercise.name, data, exercise)}\n{_set_prompt(data)}{rest_line(data)}\nВыбери вес или напиши число:",
             reply_markup=kb,
         )
         await callback.answer("Отменил")
@@ -1406,7 +1418,7 @@ async def undo_segment(callback: CallbackQuery, state: FSMContext) -> None:
         name = exercise.name if exercise else "Упражнение"
     data = await state.get_data()
     await callback.message.edit_text(
-        f"{ui.label_exercise(name)}\n{format_logged_parts(logged)}{rest_line(data)}\n\nЧто дальше?",
+        f"{_ex_title(name, data)}\n{format_logged_parts(logged)}{rest_line(data)}\n\nЧто дальше?",
         reply_markup=await _after_set_kb(target_sets, _unique_set_count(logged)),
     )
     await callback.answer("Отменил")
@@ -1595,7 +1607,7 @@ async def workout_back(callback: CallbackQuery, state: FSMContext) -> None:
                 ex_state = await _get_state(session, user.id, data["exercise_id"])
             last_reps = ex_state.last_reps if ex_state else None
         await callback.message.edit_text(
-            f"{ui.label_exercise(exercise.name)}\n{_set_prompt(data)}\n"
+            f"{_ex_title(exercise.name, data, exercise)}\n{_set_prompt(data)}\n"
             f"Вес: {float(data.get('draft_weight') or 20):g} кг"
             f"{rest_line(data)}\nСколько повторений? (или напиши число)",
             reply_markup=await _reps_kb_from_data(exercise, data, last_reps),
@@ -1608,7 +1620,7 @@ async def workout_back(callback: CallbackQuery, state: FSMContext) -> None:
             name = exercise.name if exercise else "Упражнение"
         logged = data.get("logged") or []
         await callback.message.edit_text(
-            f"{ui.label_exercise(name)}\n{format_logged_parts(logged)}{rest_line(data)}\n\nЧто дальше?",
+            f"{_ex_title(name, data)}\n{format_logged_parts(logged)}{rest_line(data)}\n\nЧто дальше?",
             reply_markup=await _after_set_kb(target_sets, _unique_set_count(logged)),
         )
     elif current in {WorkoutSG.reps.state, WorkoutSG.custom_reps.state}:
@@ -1625,7 +1637,7 @@ async def workout_back(callback: CallbackQuery, state: FSMContext) -> None:
                 exercise, ex_state, data, float(data.get("draft_weight") or 20)
             )
         await callback.message.edit_text(
-            f"{ui.label_exercise(exercise.name)}\n{_set_prompt(data)}{rest_line(data)}\nВыбери вес или напиши число:",
+            f"{_ex_title(exercise.name, data, exercise)}\n{_set_prompt(data)}{rest_line(data)}\nВыбери вес или напиши число:",
             reply_markup=kb,
         )
     elif current in {WorkoutSG.weight.state, WorkoutSG.custom_weight.state, WorkoutSG.after_set.state}:
@@ -1637,7 +1649,7 @@ async def workout_back(callback: CallbackQuery, state: FSMContext) -> None:
                 target_sets = exercise.target_sets if exercise else 3
                 name = exercise.name if exercise else "Упражнение"
             await callback.message.edit_text(
-                f"{ui.label_exercise(name)}\n{format_logged_parts(logged)}{rest_line(data)}\n\nЧто дальше?",
+                f"{_ex_title(name, data)}\n{format_logged_parts(logged)}{rest_line(data)}\n\nЧто дальше?",
                 reply_markup=await _after_set_kb(target_sets, _unique_set_count(logged)),
             )
             await callback.answer()
