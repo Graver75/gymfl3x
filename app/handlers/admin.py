@@ -1356,6 +1356,167 @@ async def adm_level_edit_save(message: Message, state: FSMContext) -> None:
     await message.answer(card, reply_markup=admin_level_detail_kb(sid, mode=mode))
 
 
+@router.callback_query(F.data == "adm:bcast")
+async def adm_bcast_menu(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    user = await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin")
+    if not user:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    from app.keyboards import admin_bcast_kb
+    from app.services.broadcast_admin import get_test_dm_telegram_id
+
+    async with SessionLocal() as session:
+        tid = await get_test_dm_telegram_id(session)
+    on = tid is not None and tid == callback.from_user.id
+    note = (
+        f"Divert ВКЛ → все cron-рассылки идут только тебе в личку "
+        f"(с пометкой [TEST · было бы → …]).\n"
+        if on
+        else "Divert ВЫКЛ — рассылки идут в обычные чаты.\n"
+    )
+    await safe_edit_text(
+        callback.message,
+        f"{ui.BTN_ADM_BCAST}\n\n{note}"
+        "Форс — отправить сейчас в выбранный чат (без ожидания часа, без dedup).",
+        reply_markup=admin_bcast_kb(test_dm_on=on),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:bcast:tdm:"))
+async def adm_bcast_toggle_tdm(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    user = await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin")
+    if not user:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    want_on = callback.data.endswith(":1")
+    from app.keyboards import admin_bcast_kb
+    from app.services.broadcast_admin import get_test_dm_telegram_id, set_test_dm_telegram_id
+
+    async with SessionLocal() as session:
+        await set_test_dm_telegram_id(
+            session, callback.from_user.id if want_on else None
+        )
+        tid = await get_test_dm_telegram_id(session)
+    on = tid is not None
+    note = (
+        "Divert ВКЛ — всё в твою личку для теста.\n"
+        if on
+        else "Divert ВЫКЛ — обычная доставка.\n"
+    )
+    await safe_edit_text(
+        callback.message,
+        f"{ui.BTN_ADM_BCAST}\n\n{note}"
+        "Форс — отправить сейчас в выбранный чат.",
+        reply_markup=admin_bcast_kb(test_dm_on=on),
+    )
+    await callback.answer("Сохранено")
+
+
+@router.callback_query(F.data.startswith("adm:bcast:k:"))
+async def adm_bcast_pick_kind(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    user = await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin")
+    if not user:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    kind = callback.data.split(":")[-1]
+    from app.keyboards import admin_bcast_targets_kb
+    from app.services.broadcast_admin import FORCE_KINDS
+    from app.services.group_chats import list_known_groups
+
+    if kind not in FORCE_KINDS:
+        await callback.answer("?", show_alert=True)
+        return
+    async with SessionLocal() as session:
+        groups = await list_known_groups(session)
+    await safe_edit_text(
+        callback.message,
+        f"Форс: {FORCE_KINDS[kind]}\nКуда отправить?",
+        reply_markup=admin_bcast_targets_kb(
+            kind,
+            admin_telegram_id=callback.from_user.id,
+            groups=groups,
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:bcast:go:"))
+async def adm_bcast_go(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    user = await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin")
+    if not user:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    # adm:bcast:go:{kind}:me | adm:bcast:go:{kind}:g{id}
+    parts = callback.data.split(":")
+    if len(parts) < 5:
+        await callback.answer("Битые данные", show_alert=True)
+        return
+    kind = parts[3]
+    target = parts[4]
+    from app.keyboards import admin_bcast_kb
+    from app.services.broadcast_admin import (
+        FORCE_KINDS,
+        force_broadcast,
+        get_test_dm_telegram_id,
+    )
+
+    if kind not in FORCE_KINDS:
+        await callback.answer("?", show_alert=True)
+        return
+
+    target_chat_id: int
+    target_label: str
+    if target == "me":
+        target_chat_id = callback.from_user.id
+        target_label = "моя личка"
+    elif target.startswith("g"):
+        try:
+            gid = int(target[1:])
+        except ValueError:
+            await callback.answer("Битый чат", show_alert=True)
+            return
+        async with SessionLocal() as session:
+            group = await session.get(GroupChat, gid)
+        if not group:
+            await callback.answer("Чат не найден", show_alert=True)
+            return
+        target_chat_id = group.chat_id
+        target_label = group.title or str(group.chat_id)
+    else:
+        await callback.answer("Неизвестная цель", show_alert=True)
+        return
+
+    await callback.answer("Шлю…")
+    try:
+        status = await force_broadcast(
+            callback.bot,
+            kind=kind,
+            target_chat_id=target_chat_id,
+            target_label=target_label,
+            admin_user=user,
+        )
+    except Exception as exc:
+        status = f"Ошибка: {exc}"[:200]
+
+    async with SessionLocal() as session:
+        tid = await get_test_dm_telegram_id(session)
+    on = tid is not None and tid == callback.from_user.id
+    await safe_edit_text(
+        callback.message,
+        f"{ui.BTN_ADM_BCAST}\n\n{status}",
+        reply_markup=admin_bcast_kb(test_dm_on=on),
+    )
+
+
 @router.callback_query(F.data == "adm:chats")
 @router.callback_query(F.data.startswith("adm:chats:p:"))
 async def adm_chats(callback: CallbackQuery, state: FSMContext) -> None:

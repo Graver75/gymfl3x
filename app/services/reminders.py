@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -12,10 +12,14 @@ from sqlalchemy.orm import selectinload
 from app.config import Settings
 from app.db.models import GroupChat, RecapSent, ScheduleDay, WorkoutTemplate
 from app.db.session import SessionLocal
-from app.services.recap import build_group_recap
-from app.services.history import format_missing_today
+from app.services.broadcast_admin import (
+    build_evening_fact,
+    build_morning_text,
+    send_with_divert,
+)
 from app import ui_copy as ui
 
+logger = logging.getLogger("gymflex.reminders")
 
 WEEKDAY_NAMES = (
     "понедельник",
@@ -58,32 +62,15 @@ async def send_morning_reminders(bot: Bot, settings: Settings) -> None:
     tz = ZoneInfo(settings.timezone)
     now = datetime.now(tz)
     today = now.date()
-    weekday = today.weekday()
 
     async with SessionLocal() as session:
-        template = await get_template_for_weekday(session, weekday)
-        if not template:
+        text, kb = await build_morning_text(bot, session, today)
+        if "нет дня в графике" in text:
             return
 
         groups = (
             await session.execute(select(GroupChat).where(GroupChat.active.is_(True)))
         ).scalars().all()
-
-        exercise_lines = "\n".join(
-            f"• {ex.name} ({ex.target_sets}×{ex.target_reps_min}-{ex.target_reps_max})"
-            for ex in template.exercises
-        )
-        me = await bot.get_me()
-        deep_link = f"https://t.me/{me.username}?start=workout"
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text=ui.BTN_OPEN_BOT, url=deep_link)]]
-        )
-        text = (
-            f"{ui.ICO_FIRE} Сегодня {WEEKDAY_NAMES[weekday]} — {template.name}\n"
-            f"#{template.hashtag}\n\n"
-            f"{exercise_lines}\n\n"
-            "Логируем в личке с ботом кнопками."
-        )
 
         for group in groups:
             hour = group.reminder_hour if group.reminder_hour is not None else settings.reminder_hour
@@ -92,10 +79,17 @@ async def send_morning_reminders(bot: Bot, settings: Settings) -> None:
             if await _already_sent(session, group.chat_id, today, "reminder"):
                 continue
             try:
-                await bot.send_message(group.chat_id, text, reply_markup=kb)
+                await send_with_divert(
+                    bot,
+                    session,
+                    intended_chat_id=group.chat_id,
+                    intended_label=group.title or str(group.chat_id),
+                    text=text,
+                    reply_markup=kb,
+                )
                 await _mark_sent(session, group.chat_id, today, "reminder")
             except Exception:
-                # Chat may have kicked the bot; keep going.
+                logger.exception("morning reminder failed chat=%s", group.chat_id)
                 continue
 
 
@@ -103,20 +97,15 @@ async def send_evening_recaps(bot: Bot, settings: Settings) -> None:
     tz = ZoneInfo(settings.timezone)
     now = datetime.now(tz)
     today = now.date()
-    weekday = today.weekday()
 
     async with SessionLocal() as session:
-        template = await get_template_for_weekday(session, weekday)
-        if not template:
+        text, template = await build_evening_fact(session, today)
+        if template is None:
             return
 
         groups = (
             await session.execute(select(GroupChat).where(GroupChat.active.is_(True)))
         ).scalars().all()
-        text = await build_group_recap(session, template, today)
-        missing = await format_missing_today(session, today, template.id)
-        if "Все онборждённые" not in missing:
-            text = f"{missing}\n\n{text}"
 
         for group in groups:
             hour = group.recap_hour if group.recap_hour is not None else settings.recap_hour
@@ -139,24 +128,26 @@ async def send_evening_recaps(bot: Bot, settings: Settings) -> None:
                 if ai_block:
                     out = f"{text}\n\n{ui.ICO_NN} Разбор ИИ\n{ai_block}"
                     if len(out) > 4000:
-                        # Prefer keeping fact recap; trim AI
                         room = 4000 - len(text) - 30
                         if room > 200:
                             out = f"{text}\n\n{ui.ICO_NN} Разбор ИИ\n{ai_block[:room]}…"
                         else:
                             out = text[:3990] + "…"
             except Exception:
-                logger = __import__("logging").getLogger("gymflex.reminders")
                 logger.exception("session_group AI failed")
             try:
-                await bot.send_message(group.chat_id, out)
+                await send_with_divert(
+                    bot,
+                    session,
+                    intended_chat_id=group.chat_id,
+                    intended_label=group.title or str(group.chat_id),
+                    text=out,
+                )
                 await _mark_sent(session, group.chat_id, today, "recap")
             except Exception:
+                logger.exception("evening recap failed chat=%s", group.chat_id)
                 continue
 
 
 async def maybe_send_live_recap(bot: Bot, session: AsyncSession, settings: Settings, day: date) -> None:
-    """Optional: after someone finishes, update is not auto-spam; evening job handles it.
-    Kept as hook for future 'all done' logic.
-    """
     _ = (bot, session, settings, day)

@@ -98,6 +98,7 @@ BTN_ADM_SNAPSHOT = "🧠 Снимок для NN"
 BTN_ADM_NN_LOAD = "📊 Нагрузка NN"
 BTN_ADM_NN_LOGS = "📋 Запросы ИИ"
 BTN_ADM_NN_PROMPTS = "📜 Промпты ИИ"
+BTN_ADM_BCAST = "📣 Рассылки (тест/форс)"
 
 # Coach / NN
 BTN_COACH_WEEK = "📊 Разбор недели"

@@ -434,6 +434,7 @@ def admin_menu_kb(*, full: bool = True) -> InlineKeyboardMarkup:
                 [InlineKeyboardButton(text=ui.BTN_ADM_LEVELS, callback_data="adm:levels")],
                 [InlineKeyboardButton(text=ui.BTN_ADM_SNAPSHOT, callback_data="adm:snapshot")],
                 [InlineKeyboardButton(text=ui.BTN_ADM_NN_LOAD, callback_data="adm:nnload")],
+                [InlineKeyboardButton(text=ui.BTN_ADM_BCAST, callback_data="adm:bcast")],
             ]
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -597,6 +598,62 @@ def admin_nn_load_kb(
         [InlineKeyboardButton(text="🔄 Обновить / проверить", callback_data="adm:nnload")]
     )
     rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_bcast_kb(*, test_dm_on: bool) -> InlineKeyboardMarkup:
+    tdm = "⏹ Выкл divert в мою личку" if test_dm_on else "▶️ Divert все рассылки → моя личка"
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=tdm,
+                callback_data="adm:bcast:tdm:0" if test_dm_on else "adm:bcast:tdm:1",
+            )
+        ],
+        [InlineKeyboardButton(text="—— Форс отправить ——", callback_data="adm:noop")],
+    ]
+    from app.services.broadcast_admin import FORCE_KINDS
+
+    for key, title in FORCE_KINDS.items():
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=title[:64], callback_data=f"adm:bcast:k:{key}"
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_bcast_targets_kb(
+    kind: str,
+    *,
+    admin_telegram_id: int,
+    groups: list,
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="👤 Мне в личку",
+                callback_data=f"adm:bcast:go:{kind}:me",
+            )
+        ]
+    ]
+    for g in groups:
+        gid = g.id
+        title = (g.title or str(g.chat_id))[:40]
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"👥 {title}",
+                    callback_data=f"adm:bcast:go:{kind}:g{gid}",
+                )
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:bcast")]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

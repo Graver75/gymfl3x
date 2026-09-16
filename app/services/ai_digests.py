@@ -263,7 +263,16 @@ async def send_week_digests(bot: Bot, settings: Settings) -> None:
                 body = f"{ui.ICO_NN} <b>Недельный разбор</b>\n\n{html.escape(raw)}"
                 if len(body) > 4000:
                     body = body[:3990] + "…"
-                await bot.send_message(user.telegram_id, body)
+                from app.services.broadcast_admin import send_with_divert
+
+                await send_with_divert(
+                    bot,
+                    session,
+                    intended_chat_id=user.telegram_id,
+                    intended_label=f"DM {user.short_code}",
+                    text=body,
+                    parse_mode="HTML",
+                )
                 await _mark_sent(session, user.telegram_id, today, "ai_week")
             except Exception:
                 logger.exception("week DM failed user=%s", user.id)
@@ -306,7 +315,15 @@ async def send_week_digests(bot: Bot, settings: Settings) -> None:
                 )
                 if len(body) > 4000:
                     body = body[:3990] + "…"
-                await bot.send_message(group.chat_id, body)
+                from app.services.broadcast_admin import send_with_divert
+
+                await send_with_divert(
+                    bot,
+                    session,
+                    intended_chat_id=group.chat_id,
+                    intended_label=group.title or str(group.chat_id),
+                    text=body,
+                )
                 await _mark_sent(session, group.chat_id, today, "ai_week_group")
             except Exception:
                 logger.exception("week group failed chat=%s", group.chat_id)
