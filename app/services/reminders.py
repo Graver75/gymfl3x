@@ -124,8 +124,32 @@ async def send_evening_recaps(bot: Bot, settings: Settings) -> None:
                 continue
             if await _already_sent(session, group.chat_id, today, "recap"):
                 continue
+            out = text
             try:
-                await bot.send_message(group.chat_id, text)
+                from app.services.ai_digests import append_session_group_ai
+
+                ai_block = await append_session_group_ai(
+                    bot,
+                    session,
+                    group=group,
+                    day=today,
+                    template=template,
+                    fact_text=text,
+                )
+                if ai_block:
+                    out = f"{text}\n\n{ui.ICO_NN} Разбор ИИ\n{ai_block}"
+                    if len(out) > 4000:
+                        # Prefer keeping fact recap; trim AI
+                        room = 4000 - len(text) - 30
+                        if room > 200:
+                            out = f"{text}\n\n{ui.ICO_NN} Разбор ИИ\n{ai_block[:room]}…"
+                        else:
+                            out = text[:3990] + "…"
+            except Exception:
+                logger = __import__("logging").getLogger("gymflex.reminders")
+                logger.exception("session_group AI failed")
+            try:
+                await bot.send_message(group.chat_id, out)
                 await _mark_sent(session, group.chat_id, today, "recap")
             except Exception:
                 continue

@@ -86,6 +86,9 @@ def profile_kb(
         [InlineKeyboardButton(text=ui.BTN_PROFILE_PROGRESS, callback_data="profile:progress")]
     )
     rows.append(
+        [InlineKeyboardButton(text=ui.BTN_PROFILE_AI, callback_data="profile:ai")]
+    )
+    rows.append(
         [InlineKeyboardButton(text=ui.BTN_COACH, callback_data="coach:menu")]
     )
     rows.append(
@@ -106,6 +109,49 @@ def profile_reset_confirm_kb() -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+def profile_ai_kb(
+    *,
+    session_on: bool,
+    week_on: bool,
+    dest: str,
+) -> InlineKeyboardMarkup:
+    dest = dest if dest in {"dm", "group", "both"} else "dm"
+    s_mark = "✓ " if session_on else ""
+    w_mark = "✓ " if week_on else ""
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"{s_mark}Разбор тренировки: {'вкл' if session_on else 'выкл'}",
+                callback_data="profile:ai:sess",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"{w_mark}Недельный разбор: {'вкл' if week_on else 'выкл'}",
+                callback_data="profile:ai:week",
+            )
+        ],
+        [InlineKeyboardButton(text="—— Куда слать ——", callback_data="adm:noop")],
+    ]
+    for key, label in (
+        ("dm", "Личка с ботом"),
+        ("group", "Общий чат"),
+        ("both", "Личка + общий чат"),
+    ):
+        mark = "✓ " if dest == key else ""
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{mark}{label}", callback_data=f"profile:ai:dest:{key}"
+                )
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="profile:home")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def scale_1_5_kb(prefix: str, *, skip_label: str | None = None) -> InlineKeyboardMarkup:
@@ -541,9 +587,32 @@ def admin_nn_load_kb(
         ]
     )
     rows.append(
+        [
+            InlineKeyboardButton(
+                text=ui.BTN_ADM_NN_PROMPTS, callback_data="adm:nnprompts"
+            )
+        ]
+    )
+    rows.append(
         [InlineKeyboardButton(text="🔄 Обновить / проверить", callback_data="adm:nnload")]
     )
     rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_nn_prompts_kb(items: list[tuple[str, str]]) -> InlineKeyboardMarkup:
+    """items: (key, title)."""
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=title[:64], callback_data=f"adm:nnprompt:{idx}"
+            )
+        ]
+        for idx, (_key, title) in enumerate(items)
+    ]
+    rows.append(
+        [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:nnload")]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

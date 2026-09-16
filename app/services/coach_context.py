@@ -14,6 +14,8 @@ WINDOW_DAYS = {
     "month": 45,
     "exercise": 45,
     "live_set": 45,
+    "session_group": 14,
+    "week_group": 21,
 }
 MAX_SESSIONS = {
     "session": 8,
@@ -21,6 +23,8 @@ MAX_SESSIONS = {
     "month": 18,
     "exercise": 14,
     "live_set": 14,
+    "session_group": 8,
+    "week_group": 12,
 }
 NOTE_MAX = 120
 
@@ -201,6 +205,7 @@ async def build_coach_context(
         states.append(
             {
                 "ex_id": st.get("exercise_id"),
+                "ex": st.get("exercise_name"),
                 "ww": st.get("working_weight"),
                 "sw": st.get("suggested_weight"),
                 "last_reps": st.get("last_reps"),
@@ -230,6 +235,7 @@ async def build_coach_context(
             "bw": user.get("body_weight"),
             "exp_m": user.get("experience_months"),
             "code": user.get("short_code"),
+            "sex": user.get("sex"),
         },
         "notes": notes,
         "exercise_state": states,
@@ -254,4 +260,111 @@ async def build_coach_context(
         out["body_weight_series"] = bw
     if live:
         out["live"] = live
+
+    if kind in {"session", "week", "month", "exercise", "live_set"}:
+        standards = await _build_standards_block(
+            session,
+            snap,
+            sessions_out=sessions_out,
+            focus_exercise_name=focus_exercise_name,
+            kind=kind,
+        )
+        if standards:
+            out["standards"] = standards
+    return out
+
+
+async def _build_standards_block(
+    session: AsyncSession,
+    snap: dict[str, Any],
+    *,
+    sessions_out: list[dict[str, Any]],
+    focus_exercise_name: str | None,
+    kind: str,
+) -> list[dict[str, Any]]:
+    """Compact strength-level rows for exercises present in context."""
+    from app.services.strength_levels import evaluate_level, get_standard
+
+    user = snap.get("user") or {}
+    bw = user.get("body_weight")
+    sex = user.get("sex")
+    names: list[str] = []
+    if focus_exercise_name:
+        names.append(focus_exercise_name)
+    for ws in sessions_out:
+        for s in ws.get("sets") or []:
+            n = s.get("ex")
+            if n and n not in names:
+                names.append(n)
+        for row in ws.get("by_ex") or []:
+            n = row.get("ex")
+            if n and n not in names:
+                names.append(n)
+    for st in snap.get("exercise_state") or []:
+        n = st.get("exercise_name")
+        if n and n not in names:
+            names.append(n)
+    if kind == "live_set" and focus_exercise_name:
+        names = [focus_exercise_name]
+    names = names[:12]
+
+    # Collect set parts from latest session mentioning the exercise
+    out: list[dict[str, Any]] = []
+    for name in names:
+        parts: list[dict] = []
+        for ws in reversed(sessions_out):
+            for s in ws.get("sets") or []:
+                if s.get("ex") == name:
+                    parts.append(
+                        {
+                            "reps": s.get("reps") or 0,
+                            "weight": s.get("kg") or 0,
+                        }
+                    )
+            if parts:
+                break
+            for row in ws.get("by_ex") or []:
+                if row.get("ex") == name:
+                    reps = row.get("reps") or []
+                    kgs = row.get("kg") or []
+                    for i, r in enumerate(reps):
+                        parts.append(
+                            {
+                                "reps": r,
+                                "weight": kgs[i] if i < len(kgs) else 0,
+                            }
+                        )
+            if parts:
+                break
+        if not parts:
+            # fallback from exercise_state working weight
+            for st in snap.get("exercise_state") or []:
+                if st.get("exercise_name") == name and st.get("working_weight"):
+                    parts = [
+                        {
+                            "reps": st.get("last_reps") or 8,
+                            "weight": st.get("working_weight"),
+                        }
+                    ]
+                    break
+        std = await get_standard(session, name)
+        lvl = evaluate_level(
+            exercise_name=name,
+            std=std,
+            parts=parts,
+            body_weight=float(bw) if bw else None,
+            sex=sex,
+        )
+        out.append(
+            {
+                "ex": name,
+                "lvl": lvl.level_label,
+                "idx": lvl.level_index,
+                "mode": lvl.mode,
+                "val": round(float(lvl.value or 0), 3),
+                "e1rm": round(float(lvl.e1rm), 1) if lvl.e1rm else None,
+                "next": lvl.next_label,
+                "next_th": lvl.next_threshold,
+            }
+        )
     return out

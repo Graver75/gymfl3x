@@ -11,7 +11,11 @@ from typing import Any
 
 from app.config import get_settings
 from app.db.session import SessionLocal
-from app.services.coach_prompts import DATA_SCHEMA_RU, SYSTEM_PROMPT, user_prompt_for
+from app.services.coach_prompts import (
+    DATA_SCHEMA_RU,
+    resolve_system_prompt,
+    user_prompt_for,
+)
 from app.services.coach_usage import is_quota_exhausted, record_usage, usage_snapshot
 from app.services.llm_providers import (
     generate_with_provider,
@@ -139,8 +143,9 @@ async def fetch_nn_meta(*, force: bool = False) -> dict[str, Any]:
 
     pid = await get_active_provider_id()
     spec = get_provider_spec(pid)
+    system = await resolve_system_prompt()
     data = {
-        "system_prompt": SYSTEM_PROMPT,
+        "system_prompt": system,
         "data_schema_ru": DATA_SCHEMA_RU,
         "model": spec.model if spec else "?",
         "provider": pid,
@@ -171,6 +176,9 @@ async def fetch_nn_load() -> dict[str, Any] | None:
         snap["providers"] = providers
         snap["coach_enabled"] = manual_on
         snap["env_nn_enabled"] = bool(settings.nn_enabled)
+        from app.services.ai_digests import digest_schedule_snapshot
+
+        snap["digest_schedule"] = digest_schedule_snapshot(settings)
         return snap
     except Exception as exc:
         logger.warning("Coach usage snapshot failed: %s", exc)
@@ -248,10 +256,10 @@ async def request_coach(
     if len(athlete_json) > 28_000:
         athlete_json = athlete_json[:27_990] + "…"
 
-    user_text = user_prompt_for(kind, athlete_json, focus or {}, locale=locale)
+    user_text = await user_prompt_for(kind, athlete_json, focus or {}, locale=locale)
 
     hist = history or []
-    if kind in {"session", "live_set"}:
+    if kind in {"session", "live_set", "session_group", "week_group"}:
         hist = []
     else:
         # Compact long prior tips so they don't re-bloat the prompt
@@ -265,9 +273,10 @@ async def request_coach(
                 trimmed.append({"role": role, "content": content})
         hist = trimmed
 
+    system = await resolve_system_prompt()
     used_pid, result = await generate_with_provider(
         provider_id=pid,
-        system=SYSTEM_PROMPT,
+        system=system,
         user_text=user_text,
         history=hist,
     )

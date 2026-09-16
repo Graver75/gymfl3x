@@ -38,19 +38,25 @@ async def format_prompt_info_text(*, turns: int = 0) -> str:
     schema = str(meta.get("data_schema_ru") or "").strip()
     model = meta.get("model") or "?"
     provider = meta.get("provider") or "?"
+    from app.services.coach_prompts import DEFAULT_TASKS
+
+    task_lines = "\n".join(f"· {k}" for k in DEFAULT_TASKS)
     parts = [
         f"{ui.ICO_NN} <b>Что уходит в нейросеть</b>",
         f"Провайдер: <code>{html.escape(str(provider))}</code> · "
         f"модель: <code>{html.escape(str(model))}</code>",
         f"Реплик в вашем диалоге: {turns} (без системного промпта)",
         "",
-        "<b>Системный промпт</b> (всегда первый, общий для коуча):",
-        f"<pre>{html.escape(system[:2800])}</pre>",
+        "<b>Системный промпт (Бендер)</b>:",
+        f"<pre>{html.escape(system[:2200])}</pre>",
         "",
-        "<b>Данные атлета в каждом запросе</b>",
-        html.escape(schema[:1500]),
+        "<b>Типы задач</b>:",
+        html.escape(task_lines),
         "",
-        "Диалог только ваш. Очистка сбрасывает историю до системного промпта.",
+        "<b>Данные в JSON</b>",
+        html.escape(schema[:1200]),
+        "",
+        "Админ: Нагрузка NN → Промпты ИИ — полный текст задач.",
     ]
     text = "\n".join(parts)
     if len(text) > 4000:
@@ -155,7 +161,14 @@ async def run_coach_and_reply(
             await session.commit()
 
         safe = html.escape(raw)
-        title = "Совет по подходу" if kind == "live_set" else "ИИ-разбор"
+        if kind == "live_set":
+            title = "Совет по подходу"
+        elif kind == "session":
+            title = "Разбор тренировки"
+        elif kind == "week":
+            title = "Недельный разбор"
+        else:
+            title = "ИИ-разбор"
         body = f"{ui.ICO_NN} <b>{title}</b>\n\n{safe}"
         if len(body) > 4000:
             body = body[:3990] + "…"

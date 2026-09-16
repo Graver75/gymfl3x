@@ -53,6 +53,29 @@ async def _add_missing_columns(conn) -> None:
                 "WHERE experience_months IS NOT NULL AND experience_as_of IS NULL"
             )
         )
+    if "ai_session_enabled" not in cols:
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN ai_session_enabled BOOLEAN DEFAULT 1")
+        )
+    if "ai_week_enabled" not in cols:
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN ai_week_enabled BOOLEAN DEFAULT 0")
+        )
+    if "ai_dest" not in cols:
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN ai_dest VARCHAR(16) DEFAULT 'dm'")
+        )
+
+    result = await conn.execute(text("PRAGMA table_info(group_chat)"))
+    gcols = {row[1] for row in result}
+    if gcols and "week_digest_hour" not in gcols:
+        await conn.execute(
+            text("ALTER TABLE group_chat ADD COLUMN week_digest_hour INTEGER DEFAULT 20")
+        )
+    if gcols and "week_digest_weekday" not in gcols:
+        await conn.execute(
+            text("ALTER TABLE group_chat ADD COLUMN week_digest_weekday INTEGER DEFAULT 6")
+        )
 
     result = await conn.execute(text("PRAGMA table_info(sessions)"))
     cols = {row[1] for row in result}

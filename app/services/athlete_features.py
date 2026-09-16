@@ -87,7 +87,9 @@ async def build_athlete_snapshot(
 
     states = (
         await session.execute(
-            select(UserExerciseState).where(UserExerciseState.user_id == user_id)
+            select(UserExerciseState)
+            .where(UserExerciseState.user_id == user_id)
+            .options(selectinload(UserExerciseState.exercise))
         )
     ).scalars().all()
 
@@ -160,6 +162,7 @@ async def build_athlete_snapshot(
             "body_weight": user.body_weight,
             "height_cm": user.height_cm,
             "experience_months": effective_experience_months(user),
+            "sex": getattr(user, "sex", None),
         },
         "body_weight_series": [
             {"weight": row.weight, "recorded_at": _iso(row.recorded_at)} for row in bw
@@ -178,6 +181,7 @@ async def build_athlete_snapshot(
         "exercise_state": [
             {
                 "exercise_id": st.exercise_id,
+                "exercise_name": st.exercise.name if st.exercise else None,
                 "working_weight": st.working_weight,
                 "suggested_weight": st.suggested_weight,
                 "last_reps": st.last_reps,

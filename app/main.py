@@ -18,6 +18,7 @@ from app.logging_setup import setup_logging
 from app.middlewares import ClearStateOnMenuMiddleware, EnsureCallbackAnsweredMiddleware
 from app.services.archive import backfill_archive
 from app.services.reminders import send_evening_recaps, send_morning_reminders
+from app.services.ai_digests import send_week_digests
 from app.services.strength_levels import (
     ensure_standards,
     sync_standards_from_catalog,
@@ -83,8 +84,21 @@ async def main() -> None:
         id="evening_recap",
         replace_existing=True,
     )
+    scheduler.add_job(
+        send_week_digests,
+        "cron",
+        minute=10,
+        args=[bot, settings],
+        id="week_digest",
+        replace_existing=True,
+    )
     scheduler.start()
-    logger.info("Scheduler started (tz=%s)", settings.timezone)
+    logger.info(
+        "Scheduler started (tz=%s) week_digest=%s@%sh",
+        settings.timezone,
+        settings.week_digest_weekday,
+        settings.week_digest_hour,
+    )
 
     try:
         await bot.delete_webhook(drop_pending_updates=True)

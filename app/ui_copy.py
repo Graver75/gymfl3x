@@ -97,6 +97,7 @@ BTN_ADM_LEVELS = "🏅 Уровни силы"
 BTN_ADM_SNAPSHOT = "🧠 Снимок для NN"
 BTN_ADM_NN_LOAD = "📊 Нагрузка NN"
 BTN_ADM_NN_LOGS = "📋 Запросы ИИ"
+BTN_ADM_NN_PROMPTS = "📜 Промпты ИИ"
 
 # Coach / NN
 BTN_COACH_WEEK = "📊 Разбор недели"
@@ -108,6 +109,14 @@ BTN_COACH_CLEAR = "🧹 Очистить диалог"
 BTN_COACH_CLEAR_OK = "🗑️ Да, очистить диалог"
 BTN_COACH_REFRESH = "🔄 Обновить статус"
 ICO_NN = "🧠"
+
+# Profile AI digests
+BTN_PROFILE_AI = "🤖 Рассылки ИИ"
+AI_DEST_LABELS = {
+    "dm": "личка с ботом",
+    "group": "общий чат",
+    "both": "личка + общий чат",
+}
 
 # Screen markers
 ICO_EXERCISE = "🏋️"

@@ -9,7 +9,7 @@ from app import ui_copy as ui
 from app.db.models import LogLevel, TrainingPhase
 from app.db.session import SessionLocal
 from app.filters import PrivateChat
-from app.keyboards import main_menu, profile_kb, profile_reset_confirm_kb
+from app.keyboards import main_menu, profile_ai_kb, profile_kb, profile_reset_confirm_kb
 from app.services.coach_delivery import format_nn_status_line
 from app.services.metrics_log import log_body_weight
 from app.services.nn_client import get_nn_status
@@ -72,7 +72,29 @@ def _profile_text(user, *, nn_line: str | None = None) -> str:
     ]
     if nn_line:
         lines.append(nn_line)
+    sess = bool(getattr(user, "ai_session_enabled", True))
+    week = bool(getattr(user, "ai_week_enabled", False))
+    dest = getattr(user, "ai_dest", None) or "dm"
+    dest_label = ui.AI_DEST_LABELS.get(dest, dest)
+    lines.append(
+        f"ИИ: тренировка {'вкл' if sess else 'выкл'} · "
+        f"неделя {'вкл' if week else 'выкл'} · {dest_label}"
+    )
     return "\n".join(lines)
+
+
+def _ai_settings_text(user) -> str:
+    sess = bool(getattr(user, "ai_session_enabled", True))
+    week = bool(getattr(user, "ai_week_enabled", False))
+    dest = getattr(user, "ai_dest", None) or "dm"
+    return (
+        f"{ui.BTN_PROFILE_AI}\n\n"
+        f"Разбор тренировки (после зала): {'вкл' if sess else 'выкл'}\n"
+        f"Недельный разбор: {'вкл' if week else 'выкл'}\n"
+        f"Куда слать: {ui.AI_DEST_LABELS.get(dest, dest)}\n\n"
+        "Общий чат видят все участники — включай group/both только если ок.\n"
+        "В общий чат разборы уходят одной сводкой (вечер / воскресенье), не по одному."
+    )
 
 
 async def _nn_line() -> str:
@@ -239,6 +261,98 @@ async def profile_home_cb(callback: CallbackQuery) -> None:
         reply_markup=profile_kb(phase, log_level, sex=sex),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data == "profile:ai")
+async def profile_ai_menu(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    async with SessionLocal() as session:
+        user = await get_or_create_user(
+            session,
+            callback.from_user.id,
+            callback.from_user.full_name or "Athlete",
+        )
+        if not user.onboarding_done:
+            await callback.answer("Сначала /start", show_alert=True)
+            return
+        text = _ai_settings_text(user)
+        sess = bool(getattr(user, "ai_session_enabled", True))
+        week = bool(getattr(user, "ai_week_enabled", False))
+        dest = getattr(user, "ai_dest", None) or "dm"
+    await callback.message.edit_text(
+        text, reply_markup=profile_ai_kb(session_on=sess, week_on=week, dest=dest)
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "profile:ai:sess")
+async def profile_ai_toggle_session(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    async with SessionLocal() as session:
+        user = await get_or_create_user(
+            session,
+            callback.from_user.id,
+            callback.from_user.full_name or "Athlete",
+        )
+        user.ai_session_enabled = not bool(getattr(user, "ai_session_enabled", True))
+        await session.commit()
+        text = _ai_settings_text(user)
+        sess = bool(user.ai_session_enabled)
+        week = bool(getattr(user, "ai_week_enabled", False))
+        dest = getattr(user, "ai_dest", None) or "dm"
+    await callback.message.edit_text(
+        text, reply_markup=profile_ai_kb(session_on=sess, week_on=week, dest=dest)
+    )
+    await callback.answer("Сохранено")
+
+
+@router.callback_query(F.data == "profile:ai:week")
+async def profile_ai_toggle_week(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    async with SessionLocal() as session:
+        user = await get_or_create_user(
+            session,
+            callback.from_user.id,
+            callback.from_user.full_name or "Athlete",
+        )
+        user.ai_week_enabled = not bool(getattr(user, "ai_week_enabled", False))
+        await session.commit()
+        text = _ai_settings_text(user)
+        sess = bool(getattr(user, "ai_session_enabled", True))
+        week = bool(user.ai_week_enabled)
+        dest = getattr(user, "ai_dest", None) or "dm"
+    await callback.message.edit_text(
+        text, reply_markup=profile_ai_kb(session_on=sess, week_on=week, dest=dest)
+    )
+    await callback.answer("Сохранено")
+
+
+@router.callback_query(F.data.startswith("profile:ai:dest:"))
+async def profile_ai_set_dest(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    dest = callback.data.split(":")[-1]
+    if dest not in {"dm", "group", "both"}:
+        await callback.answer("?")
+        return
+    async with SessionLocal() as session:
+        user = await get_or_create_user(
+            session,
+            callback.from_user.id,
+            callback.from_user.full_name or "Athlete",
+        )
+        user.ai_dest = dest
+        await session.commit()
+        text = _ai_settings_text(user)
+        sess = bool(getattr(user, "ai_session_enabled", True))
+        week = bool(getattr(user, "ai_week_enabled", False))
+    await callback.message.edit_text(
+        text, reply_markup=profile_ai_kb(session_on=sess, week_on=week, dest=dest)
+    )
+    await callback.answer("Куда слать — сохранено")
 
 
 @router.callback_query(F.data == "profile:reset")

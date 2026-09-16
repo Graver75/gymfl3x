@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     tokenn_model: str = Field(default="gemini-3.7-flash", alias="TOKENN_MODEL")
     coach_profile_enabled: bool = Field(default=False, alias="COACH_PROFILE_ENABLED")
     coach_live_cooldown_sec: float = Field(default=90.0, alias="COACH_LIVE_COOLDOWN_SEC")
+    week_digest_hour: int = Field(default=20, alias="WEEK_DIGEST_HOUR")
+    week_digest_weekday: int = Field(default=6, alias="WEEK_DIGEST_WEEKDAY")  # 0=Mon..6=Sun
 
     @field_validator("admin_telegram_ids", mode="before")
     @classmethod

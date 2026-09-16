@@ -21,7 +21,8 @@ _PT = ZoneInfo("America/Los_Angeles")
 SETTING_TOKENN_LAST_REMAIN = "tokenn_last_remain_quota"
 
 LIVE_KIND = "live_set"
-PROFILE_KINDS = frozenset({"week", "month", "exercise"})
+PROFILE_KINDS = frozenset({"week", "month", "exercise", "week_group"})
+SESSION_KINDS = frozenset({"session", "session_group"})
 # Fallback avg quota units when Tokenn samples are missing (from observed UI)
 _FALLBACK_QUOTA = {
     "live_set": 14_000,
@@ -53,6 +54,8 @@ def kind_bucket(kind: str | None) -> str:
         return "live_set"
     if k in PROFILE_KINDS:
         return "profile"
+    if k in SESSION_KINDS:
+        return "other"
     return "other"
 
 

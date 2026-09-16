@@ -1057,11 +1057,25 @@ async def adm_hours(callback: CallbackQuery, state: FSMContext) -> None:
         group = (await session.execute(select(GroupChat).limit(1))).scalar_one_or_none()
     rem = group.reminder_hour if group else settings.reminder_hour
     rec = group.recap_hour if group else settings.recap_hour
+    wh = (
+        group.week_digest_hour
+        if group and group.week_digest_hour is not None
+        else settings.week_digest_hour
+    )
+    wd = (
+        group.week_digest_weekday
+        if group and group.week_digest_weekday is not None
+        else settings.week_digest_weekday
+    )
+    from app.services.reminders import WEEKDAY_NAMES
+
     await state.set_state(AdminSG.set_hours)
     await callback.message.answer(
         f"{ui.BTN_ADM_HOURS}\n"
-        f"Сейчас: напоминание {rem}:00, сводка {rec}:00 ({settings.timezone}).\n"
-        "Пришли два числа через пробел, например: 8 22"
+        f"Сейчас: напоминание {rem}:00, сводка {rec}:00, "
+        f"неделя ИИ {WEEKDAY_NAMES[wd % 7]} {wh}:00 ({settings.timezone}).\n"
+        "Пришли 2–4 числа: reminder recap [week_hour] [week_weekday 0=пн..6=вс]\n"
+        "Примеры: 8 22   или   8 22 20   или   8 22 20 6"
     )
     await callback.answer()
 
@@ -1073,12 +1087,20 @@ async def adm_set_hours(message: Message, state: FSMContext) -> None:
     if not await _full_admin(message.from_user.id, message.from_user.full_name or "Admin"):
         return
     parts = (message.text or "").split()
+    settings = get_settings()
     try:
         rem, rec = int(parts[0]), int(parts[1])
-        if not (0 <= rem <= 23 and 0 <= rec <= 23):
+        wh = int(parts[2]) if len(parts) >= 3 else settings.week_digest_hour
+        wd = int(parts[3]) if len(parts) >= 4 else settings.week_digest_weekday
+        if not (
+            0 <= rem <= 23
+            and 0 <= rec <= 23
+            and 0 <= wh <= 23
+            and 0 <= wd <= 6
+        ):
             raise ValueError
     except (ValueError, IndexError):
-        await message.answer("Формат: 8 22")
+        await message.answer("Формат: 8 22   или  8 22 20 6")
         return
 
     async with SessionLocal() as session:
@@ -1086,15 +1108,21 @@ async def adm_set_hours(message: Message, state: FSMContext) -> None:
         if not groups:
             await message.answer(
                 "Группа ещё не привязана. Добавь бота в чат — часы сохранятся при появлении группы.\n"
-                f"Пока в .env: REMINDER_HOUR / RECAP_HOUR. Запомнил для следующих групп: {rem} и {rec}."
+                f"Пока в .env: REMINDER_HOUR / RECAP_HOUR / WEEK_DIGEST_*."
             )
-            # store on a placeholder? skip — update settings file not needed
         for g in groups:
             g.reminder_hour = rem
             g.recap_hour = rec
+            g.week_digest_hour = wh
+            g.week_digest_weekday = wd
         await session.commit()
     await state.clear()
-    await message.answer(f"Часы: напоминание {rem}:00, сводка {rec}:00")
+    from app.services.reminders import WEEKDAY_NAMES
+
+    await message.answer(
+        f"Часы: напоминание {rem}:00, сводка {rec}:00, "
+        f"неделя ИИ {WEEKDAY_NAMES[wd]} {wh}:00"
+    )
 
 
 @router.callback_query(F.data == "adm:missing")
@@ -1640,6 +1668,21 @@ def _format_nn_load(data: dict | None) -> str:
         ]
     )
 
+    sched = data.get("digest_schedule") or {}
+    if sched:
+        lines.append("Расписания ИИ:")
+        lines.append(
+            f"· сводка+session_group: ~{sched.get('recap_hour', '?')}:00"
+        )
+        lines.append(
+            f"· week/week_group: {sched.get('week_digest_weekday_name', '?')} "
+            f"~{sched.get('week_digest_hour', '?')}:00"
+        )
+        soon = sched.get("coming_soon") or []
+        if soon:
+            lines.append(f"· скоро: {', '.join(soon)}")
+        lines.append("")
+
     remain_quota = data.get("remain_quota")
     estimates = data.get("estimates") or {}
     if remain_quota is not None:
@@ -1647,7 +1690,7 @@ def _format_nn_load(data: dict | None) -> str:
     if estimates:
         labels = {
             "live_set": "совет по подходу",
-            "profile": "разбор профиля",
+            "profile": "разбор профиля/неделя",
             "other": "прочее (session…)",
         }
         lines.append("Остаток по расчёту (min soft RPD и баланса):")
@@ -1742,6 +1785,83 @@ async def adm_nn_load(callback: CallbackQuery) -> None:
 
 _NN_LOG_PAGE = 8
 _NN_CHUNK = 3400
+
+
+@router.callback_query(F.data == "adm:nnprompts")
+async def adm_nn_prompts(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    user = await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin")
+    if not user:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    from app.keyboards import admin_nn_prompts_kb
+    from app.services.coach_prompts import list_prompt_catalog
+
+    catalog = list_prompt_catalog()
+    items = [(k, t) for k, t, _ in catalog]
+    await safe_edit_text(
+        callback.message,
+        f"{ui.BTN_ADM_NN_PROMPTS}\n"
+        "Сиды Бендера (view). Override в app_settings: prompt_system_bender / prompt_task_*.",
+        reply_markup=admin_nn_prompts_kb(items),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:nnprompt:"))
+async def adm_nn_prompt_view(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    user = await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin")
+    if not user:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    try:
+        idx = int(callback.data.split(":")[-1])
+    except ValueError:
+        await callback.answer("?")
+        return
+    import html as html_mod
+
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    from app.services.coach_prompts import list_prompt_catalog, resolve_system_prompt, resolve_task_prompt
+
+    catalog = list_prompt_catalog()
+    if idx < 0 or idx >= len(catalog):
+        await callback.answer("Нет такого", show_alert=True)
+        return
+    key, title, seed = catalog[idx]
+    async with SessionLocal() as session:
+        if key == "prompt_system_bender":
+            body = await resolve_system_prompt(session)
+        elif key.startswith("prompt_task_"):
+            kind = key[len("prompt_task_") :]
+            body = await resolve_task_prompt(kind, session)
+        else:
+            body = seed
+    text = (
+        f"{ui.BTN_ADM_NN_PROMPTS}: {html_mod.escape(title)}\n"
+        f"<code>{html_mod.escape(key)}</code>\n\n"
+        f"<pre>{html_mod.escape(body[:3500])}</pre>"
+    )
+    if len(text) > 4000:
+        text = text[:3990] + "…"
+    await safe_edit_text(
+        callback.message,
+        text,
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=ui.BTN_BACK, callback_data="adm:nnprompts"
+                    )
+                ]
+            ]
+        ),
+    )
+    await callback.answer()
 
 
 def _format_nn_log_card(row: dict) -> str:

@@ -75,6 +75,10 @@ class User(Base):
     is_program_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     sex: Mapped[str | None] = mapped_column(String(16), nullable=True)  # male | female
     onboarding_done: Mapped[bool] = mapped_column(Boolean, default=False)
+    # AI digest prefs: session after workout / weekly; dest dm|group|both
+    ai_session_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    ai_week_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    ai_dest: Mapped[str] = mapped_column(String(16), default="dm")  # dm | group | both
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     exercise_states: Mapped[list[UserExerciseState]] = relationship(back_populates="user")
@@ -92,6 +96,8 @@ class GroupChat(Base):
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     reminder_hour: Mapped[int] = mapped_column(Integer, default=8)
     recap_hour: Mapped[int] = mapped_column(Integer, default=22)
+    week_digest_hour: Mapped[int] = mapped_column(Integer, default=20)
+    week_digest_weekday: Mapped[int] = mapped_column(Integer, default=6)  # 0=Mon .. 6=Sun
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
