@@ -54,7 +54,7 @@ async def format_prompt_info_text(*, turns: int = 0) -> str:
         html.escape(task_lines),
         "",
         "<b>Данные в JSON</b>",
-        html.escape(schema[:1200]),
+        f"<pre>{html.escape(schema[:1200])}</pre>",
         "",
         "Админ: Нагрузка NN → Промпты ИИ — полный текст задач.",
     ]

@@ -754,8 +754,16 @@ async def force_week_plan(
         admin_telegram_id,
         f"{header}\n\n{summary}",
         detail,
-        raw_block,
     )
+    if raw_block:
+        from app import ui_copy as ui
+
+        for chunk in _chunk_text(raw_block):
+            try:
+                await bot.send_message(admin_telegram_id, ui.pre(chunk))
+                n += 1
+            except Exception:
+                logger.exception("failed to DM week_plan raw chunk")
     panel = (
         f"{summary}\n\n"
         f"Полный результат отправлен в личку ({n} сообщ.).\n"

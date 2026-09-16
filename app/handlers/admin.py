@@ -1782,10 +1782,8 @@ async def adm_hidden_raw(callback: CallbackQuery) -> None:
     total = max(1, (len(raw) + PREVIEW_CHUNK - 1) // PREVIEW_CHUNK)
     chunk = max(0, min(chunk, total - 1))
     piece = raw[chunk * PREVIEW_CHUNK : (chunk + 1) * PREVIEW_CHUNK]
-    header = f"📜 Превью · {label} · {chunk + 1}/{total}\n\n"
-    text = header + piece
-    if len(text) > 4090:
-        text = text[:4085] + "…"
+    header = f"📜 Превью · {ui.esc(label)} · {chunk + 1}/{total}\n\n"
+    text = ui.pre_chunk(header, piece)
     await safe_edit_text(
         callback.message,
         text,
@@ -2018,19 +2016,21 @@ async def adm_snapshot(callback: CallbackQuery) -> None:
     async with SessionLocal() as session:
         snap = await build_athlete_snapshot(session, user.id, days=60)
     adh = snap.get("adherence") or {}
-    lines = [
-        f"{ui.BTN_ADM_SNAPSHOT} (твой профиль, 60 дней)",
-        f"Сессий: {adh.get('finished_sessions', 0)}",
-        f"По графику: {adh.get('logged_on_schedule', 0)}/{adh.get('scheduled_days', 0)}",
-        f"Заметок: {len(snap.get('notes_timeline') or [])}",
-        f"BW точек: {len(snap.get('body_weight_series') or [])}",
-        f"Лог: {(snap.get('user') or {}).get('log_level')}",
-        "",
-        "JSON (обрезка):",
-        json.dumps(snap, ensure_ascii=False)[:3500],
-    ]
+    snap_json = json.dumps(snap, ensure_ascii=False, default=str)
+    text = (
+        f"{ui.BTN_ADM_SNAPSHOT} (твой профиль, 60 дней)\n"
+        f"Сессий: {adh.get('finished_sessions', 0)}\n"
+        f"По графику: {adh.get('logged_on_schedule', 0)}/{adh.get('scheduled_days', 0)}\n"
+        f"Заметок: {len(snap.get('notes_timeline') or [])}\n"
+        f"BW точек: {len(snap.get('body_weight_series') or [])}\n"
+        f"Лог: {ui.esc((snap.get('user') or {}).get('log_level'))}\n\n"
+        f"JSON (обрезка):\n"
+        f"{ui.pre(snap_json, limit=3200)}"
+    )
+    if len(text) > 4090:
+        text = text[:4085] + "…"
     await callback.message.edit_text(
-        "\n".join(lines),
+        text,
         reply_markup=admin_menu_kb(full=True),
     )
     await callback.answer()
@@ -2483,9 +2483,7 @@ async def adm_nn_log_view(callback: CallbackQuery) -> None:
     chunk = max(0, min(chunk, total_chunks - 1))
     piece = body[chunk * _NN_CHUNK : (chunk + 1) * _NN_CHUNK]
     header = f"{title} · #{log_id} · {chunk + 1}/{total_chunks}\n\n"
-    text = header + piece
-    if len(text) > 4090:
-        text = text[:4085] + "…"
+    text = ui.pre_chunk(header, piece)
     await safe_edit_text(
         callback.message,
         text,

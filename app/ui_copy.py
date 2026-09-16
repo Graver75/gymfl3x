@@ -15,6 +15,24 @@ def b(text: object) -> str:
     """Bold HTML; escapes content first."""
     return f"<b>{esc(text)}</b>"
 
+
+def pre(text: object, *, limit: int | None = None) -> str:
+    """Monospace block for raw JSON / payloads (Telegram HTML ≈ markdown ```)."""
+    body = str(text)
+    if limit is not None and len(body) > limit:
+        body = body[: max(0, limit - 1)] + "…"
+    return f"<pre>{esc(body)}</pre>"
+
+
+def pre_chunk(header: str, body: str, *, max_total: int = 4090) -> str:
+    """Header + <pre>body</pre>, trimming body so the message fits Telegram limits."""
+    open_t, close_t = "<pre>", "</pre>"
+    room = max_total - len(header) - len(open_t) - len(close_t)
+    if room < 64:
+        room = 64
+    piece = body if len(body) <= room else body[: room - 1] + "…"
+    return f"{header}{open_t}{esc(piece)}{close_t}"
+
 # Reply menu (exact texts for F.text filters)
 BTN_WORKOUT = "🏋️ Тренировка"
 BTN_TODAY = "📅 Сегодня"
