@@ -112,7 +112,6 @@ async def build_session_group_payload(
                 "user": ctx.get("user"),
                 "sessions": ctx.get("sessions"),
                 "exercise_state": ctx.get("exercise_state"),
-                "standards": ctx.get("standards"),
                 "focus": ctx.get("focus"),
             }
         )
@@ -141,7 +140,6 @@ async def build_week_group_payload(
                 "aggregates": ctx.get("aggregates"),
                 "sessions": ctx.get("sessions"),
                 "exercise_state": ctx.get("exercise_state"),
-                "standards": ctx.get("standards"),
             }
         )
     return {"kind": "week_group", "athletes": rows}
