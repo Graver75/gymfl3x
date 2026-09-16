@@ -234,6 +234,36 @@ async def admin_home(message: Message, state: FSMContext) -> None:
     )
 
 
+@router.message(Command("week"))
+async def cmd_week(message: Message) -> None:
+    """Force week_group digest into the current chat (admin only)."""
+    if message.from_user is None or message.chat is None:
+        return
+    user = await _full_admin(message.from_user.id, message.from_user.full_name or "Admin")
+    if not user:
+        await message.answer("Нет доступа. /week — только для админа.")
+        return
+    from app.services.broadcast_admin import FORCE_KINDS, send_week_group_digest
+
+    waiting = await message.answer(
+        f"{ui.ICO_NN} Считаю «{FORCE_KINDS['wg']}»… это может занять минуту."
+    )
+    try:
+        status = await send_week_group_digest(message.bot, message.chat.id)
+    except Exception as exc:
+        status = f"Ошибка: {exc}"[:300]
+    if status == "ok":
+        try:
+            await waiting.edit_text(f"{ui.ICO_NN} Готово — разбор выше ↑")
+        except Exception:
+            pass
+    else:
+        try:
+            await waiting.edit_text(f"{ui.ICO_NN} {status}")
+        except Exception:
+            await message.answer(status)
+
+
 @router.callback_query(F.data == "adm:home")
 async def adm_home_cb(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.from_user is None or callback.message is None:
