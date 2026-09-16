@@ -39,6 +39,7 @@ from app.keyboards import (
     exercise_delete_confirm_kb,
     exercise_edit_kb,
     exercise_move_kb,
+    main_menu,
     schedule_kb,
     schedule_pick_template_kb,
     template_detail_kb,
