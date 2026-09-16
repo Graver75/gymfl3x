@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from html import escape as _html_escape
 
@@ -14,6 +15,24 @@ def esc(text: object) -> str:
 def b(text: object) -> str:
     """Bold HTML; escapes content first."""
     return f"<b>{esc(text)}</b>"
+
+
+def coach_html(text: object) -> str:
+    """Escape LLM text for Telegram HTML; turn common Markdown into tags.
+
+    Models often emit **bold** / *italic* despite «без Markdown» in prompts.
+    Bot default parse_mode is HTML, so raw ** shows literally without this.
+    """
+    t = esc(text)
+    # **bold** / __bold__
+    t = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t, flags=re.DOTALL)
+    t = re.sub(r"__(.+?)__", r"<b>\1</b>", t, flags=re.DOTALL)
+    # *italic* / _italic_ (avoid matching inside already-converted tags)
+    t = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<i>\1</i>", t, flags=re.DOTALL)
+    t = re.sub(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", r"<i>\1</i>", t, flags=re.DOTALL)
+    # Leading markdown headers → bold line
+    t = re.sub(r"(?m)^#{1,6}\s+(.+)$", r"<b>\1</b>", t)
+    return t
 
 
 def pre(text: object, *, limit: int | None = None) -> str:

@@ -163,7 +163,7 @@ async def run_coach_and_reply(
         except Exception:
             logger.exception("Dialog history save failed (reply still sent)")
 
-        safe = html.escape(raw)
+        safe = ui.coach_html(raw)
         if kind == "live_set":
             title = "Совет по подходу"
         elif kind == "session":

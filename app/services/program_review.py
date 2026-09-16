@@ -432,4 +432,4 @@ def format_advice_for_program_card(advice: str | None) -> str | None:
     text = (advice or "").strip()
     if not text:
         return None
-    return f"{ui.b('Совет ИИ')}\n{ui.esc(text)}"
+    return f"{ui.b('Совет ИИ')}\n{ui.coach_html(text)}"

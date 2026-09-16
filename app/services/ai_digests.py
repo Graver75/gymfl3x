@@ -273,7 +273,7 @@ async def send_week_digests(bot: Bot, settings: Settings) -> None:
             if not raw:
                 continue
             try:
-                body = f"{ui.ICO_NN} <b>Недельный разбор</b>\n\n{html.escape(raw)}"
+                body = f"{ui.ICO_NN} <b>Недельный разбор</b>\n\n{ui.coach_html(raw)}"
                 if len(body) > 4000:
                     body = body[:3990] + "…"
                 from app.services.broadcast_admin import send_with_divert
@@ -324,7 +324,7 @@ async def send_week_digests(bot: Bot, settings: Settings) -> None:
             try:
                 body = (
                     f"{ui.ICO_NN} Недельный разбор команды "
-                    f"({WEEKDAY_NAMES[today.weekday()]})\n\n{raw}"
+                    f"({WEEKDAY_NAMES[today.weekday()]})\n\n{ui.coach_html(raw)}"
                 )
                 if len(body) > 4000:
                     body = body[:3990] + "…"

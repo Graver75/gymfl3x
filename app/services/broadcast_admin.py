@@ -251,7 +251,7 @@ async def force_broadcast(
                 return "LLM не ответил на week_group"
             body = (
                 f"{ui.ICO_NN} Недельный разбор команды "
-                f"({WEEKDAY_NAMES[today.weekday()]})\n\n{raw}"
+                f"({WEEKDAY_NAMES[today.weekday()]})\n\n{ui.coach_html(raw)}"
             )
             if len(body) > 4000:
                 body = body[:3990] + "…"
@@ -272,7 +272,7 @@ async def force_broadcast(
             )
             if not raw:
                 return "LLM не ответил на week"
-            body = f"{ui.ICO_NN} <b>Недельный разбор</b>\n\n{html.escape(raw)}"
+            body = f"{ui.ICO_NN} <b>Недельный разбор</b>\n\n{ui.coach_html(raw)}"
             if len(body) > 4000:
                 body = body[:3990] + "…"
             await bot.send_message(target_chat_id, body)
