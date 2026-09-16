@@ -5,17 +5,17 @@ from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 
 from app import ui_copy as ui
 from app.config import get_settings
-from app.db.models import ScheduleDay, WorkoutTemplate
+from app.db.models import WorkoutTemplate
 from app.db.session import SessionLocal
 from app.filters import PrivateChat
-from app.keyboards import main_menu
+from app.keyboards import main_menu, program_advice_kb, program_card_kb
 from app.services.reminders import WEEKDAY_NAMES, get_template_for_weekday
+from app.services.telegram_safe import safe_edit_text
 from app.services.users import can_open_admin, get_or_create_user
 
 router = Router(name="program")
@@ -50,6 +50,19 @@ def _format_template(template: WorkoutTemplate) -> str:
     return "\n".join(lines)
 
 
+async def _program_payload() -> tuple[str, int | None] | None:
+    """Return (html, alarm_or_none) or None if no templates."""
+    from app.services.program_review import build_program_card_text
+
+    async with SessionLocal() as session:
+        templates = (
+            await session.execute(select(WorkoutTemplate).limit(1))
+        ).scalars().first()
+        if not templates:
+            return None
+        return await build_program_card_text(session)
+
+
 @router.message(Command("program"))
 @router.message(F.text == ui.BTN_PROGRAM)
 async def show_program(message: Message) -> None:
@@ -57,54 +70,60 @@ async def show_program(message: Message) -> None:
     if not user:
         return
 
-    async with SessionLocal() as session:
-        schedule = (
-            await session.execute(
-                select(ScheduleDay).options(
-                    selectinload(ScheduleDay.template).selectinload(WorkoutTemplate.exercises)
-                )
-            )
-        ).scalars().all()
-        templates = (
-            await session.execute(
-                select(WorkoutTemplate).options(selectinload(WorkoutTemplate.exercises))
-            )
-        ).scalars().all()
-        from app.services.program_review import load_stored_advice
-
-        advice_raw = await load_stored_advice(session)
-
-    if not templates:
+    payload = await _program_payload()
+    if payload is None:
         await message.answer(
             f"Программа ещё не задана. Админ: кнопка «{ui.BTN_ADMIN}».",
             reply_markup=main_menu(show_admin=can_open_admin(user)),
         )
         return
 
-    by_day = {s.weekday: s.template for s in schedule}
-    lines = [f"{ui.b(ui.BTN_PROGRAM)} График недели (read-only):"]
-    for weekday in range(7):
-        tpl = by_day.get(weekday)
-        label = ui.b(tpl.name) if tpl else "отдых"
-        lines.append(f"• {ui.b(WEEKDAY_NAMES[weekday])}: {label}")
+    text, alarm = payload
+    await message.answer(text, reply_markup=program_card_kb(alarm))
 
-    from app.services.program_review import format_advice_for_program_card
 
-    advice_block = format_advice_for_program_card(advice_raw)
-    if advice_block:
-        lines.append("")
-        lines.append(advice_block)
-
-    lines.append("")
-    lines.append(f"{ui.b('Шаблоны:')}")
-    for tpl in templates:
-        lines.append("")
-        lines.append(_format_template(tpl))
-
-    await message.answer(
-        "\n".join(lines),
-        reply_markup=main_menu(show_admin=can_open_admin(user)),
+@router.callback_query(F.data == "prog:ai")
+async def prog_ai_open(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    from app.services.program_review import (
+        format_advice_view,
+        load_alarm_level,
+        load_stored_advice,
     )
+
+    async with SessionLocal() as session:
+        advice = await load_stored_advice(session)
+        alarm = await load_alarm_level(session)
+    if not advice:
+        await callback.answer("Совета пока нет", show_alert=True)
+        return
+    text = format_advice_view(advice, alarm_level=alarm)
+    if len(text) > 4000:
+        text = text[:3990] + "…"
+    await safe_edit_text(
+        callback.message,
+        text,
+        reply_markup=program_advice_kb(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "prog:back")
+async def prog_ai_back(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    payload = await _program_payload()
+    if payload is None:
+        await callback.answer("Программа пуста", show_alert=True)
+        return
+    text, alarm = payload
+    await safe_edit_text(
+        callback.message,
+        text,
+        reply_markup=program_card_kb(alarm),
+    )
+    await callback.answer()
 
 
 @router.message(Command("today"))

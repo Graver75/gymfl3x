@@ -35,8 +35,88 @@ HISTORY_MAX = 20
 PREVIEW_CHUNK = 3500
 MAX_TOKENS = 2048
 
+ALARM_EMOJI = ui.PROGRAM_ALARM_EMOJI
+
 _job_lock = asyncio.Lock()
 _job_running: dict[str, Any] | None = None
+
+
+def alarm_emoji(level: int | None) -> str:
+    try:
+        n = int(level) if level is not None else 3
+    except (TypeError, ValueError):
+        n = 3
+    n = max(1, min(5, n))
+    return ALARM_EMOJI.get(n, ALARM_EMOJI[3])
+
+
+def clamp_alarm_level(raw: object) -> int:
+    try:
+        n = int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 3
+    return max(1, min(5, n))
+
+
+def parse_review_response(raw: str) -> tuple[str, int]:
+    """Return (formatted_plain_advice, alarm_level)."""
+    from app.services.week_plan import extract_json_object
+
+    data = extract_json_object(raw)
+    if not data or not any(
+        data.get(k) for k in ("coverage", "order", "volume", "risks", "improvements")
+    ):
+        text = (raw or "").strip()
+        return text, 3
+
+    level = clamp_alarm_level(data.get("alarm_level"))
+    emoji = alarm_emoji(level)
+    sections = [
+        ("Покрытие / баланс", data.get("coverage")),
+        ("Порядок", data.get("order")),
+        ("Объём", data.get("volume")),
+        ("Риски", data.get("risks")),
+        ("Что улучшить", data.get("improvements")),
+    ]
+    lines = [f"{emoji} Уровень тревоги: {level}/5", ""]
+    for title, body in sections:
+        body_s = str(body or "").strip()
+        if not body_s:
+            continue
+        lines.append(title)
+        lines.append(body_s)
+        lines.append("")
+    advice = "\n".join(lines).strip()
+    return advice, level
+
+
+def format_advice_html(advice: str | None) -> str:
+    """Structured advice → Telegram HTML (section titles bold)."""
+    text = (advice or "").strip()
+    if not text:
+        return ""
+    section_titles = {
+        "Покрытие / баланс",
+        "Порядок",
+        "Объём",
+        "Риски",
+        "Что улучшить",
+    }
+    out: list[str] = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if stripped in section_titles:
+            out.append(f"<b>{ui.esc(stripped)}</b>")
+        elif stripped.startswith("✅") or stripped.startswith("🟡") or stripped.startswith(
+            "⚠️"
+        ) or stripped.startswith("🟠") or stripped.startswith("☠️"):
+            # alarm header line
+            out.append(f"<b>{ui.esc(stripped)}</b>")
+        elif stripped.startswith("Уровень тревоги") or "Уровень тревоги:" in stripped:
+            out.append(f"<b>{ui.esc(stripped)}</b>")
+        else:
+            out.append(ui.coach_html(line) if line else "")
+    return "\n".join(out)
 
 
 def is_program_review_running() -> bool:
@@ -184,6 +264,72 @@ async def append_run_history(session: AsyncSession, entry: dict[str, Any]) -> No
     await session.commit()
 
 
+async def load_alarm_level(session: AsyncSession) -> int | None:
+    meta = await load_meta(session)
+    if not meta:
+        return None
+    if "alarm_level" not in meta:
+        return None
+    return clamp_alarm_level(meta.get("alarm_level"))
+
+
+async def build_program_card_text(session: AsyncSession) -> tuple[str, int | None]:
+    """Full program card HTML + alarm_level if advice exists."""
+    schedule = list(
+        (
+            await session.execute(
+                select(ScheduleDay).options(
+                    selectinload(ScheduleDay.template).selectinload(
+                        WorkoutTemplate.exercises
+                    )
+                )
+            )
+        ).scalars().all()
+    )
+    templates = list(
+        (
+            await session.execute(
+                select(WorkoutTemplate).options(selectinload(WorkoutTemplate.exercises))
+            )
+        ).scalars().all()
+    )
+    advice = await load_stored_advice(session)
+    if not advice:
+        alarm = None
+    else:
+        alarm = await load_alarm_level(session)
+        if alarm is None:
+            alarm = 3
+
+    by_day = {s.weekday: s.template for s in schedule}
+    lines = [f"{ui.b(ui.BTN_PROGRAM)} График недели (read-only):"]
+    for weekday in range(7):
+        tpl = by_day.get(weekday)
+        label = ui.b(tpl.name) if tpl else "отдых"
+        lines.append(f"• {ui.b(WEEKDAY_NAMES[weekday])}: {label}")
+
+    lines.append("")
+    lines.append(f"{ui.b('Шаблоны:')}")
+    for tpl in templates:
+        lines.append("")
+        lines.append(_format_template_html(tpl))
+
+    return "\n".join(lines), alarm
+
+
+def _format_template_html(template: Any) -> str:
+    lines = [f"{ui.ICO_EXERCISE} {ui.b(template.name)} (#{ui.esc(template.hashtag)})"]
+    if not template.exercises:
+        lines.append("  (упражнений пока нет)")
+    for ex in template.exercises:
+        lines.append(
+            f"  {ex.position + 1}. {ui.b(ex.name)} — "
+            f"{ex.target_sets}×{ex.target_reps_min}-{ex.target_reps_max}, "
+            f"шаг {ex.weight_step:g} кг"
+        )
+    return "\n".join(lines)
+
+
 async def save_review_result(
     session: AsyncSession,
     *,
@@ -255,20 +401,23 @@ async def run_program_review(
                 "request_preview": json.dumps(payload, ensure_ascii=False, indent=2)[:8000],
             }
 
+        advice, alarm_level = parse_review_response(text)
         ok_meta = {
             "at": now,
             "ok": True,
             "fingerprint": fp,
             "force": force,
             "model": model,
-            "chars": len(text),
+            "chars": len(advice),
+            "alarm_level": alarm_level,
         }
-        await save_review_result(session, advice=text, fingerprint=fp, meta=ok_meta)
+        await save_review_result(session, advice=advice, fingerprint=fp, meta=ok_meta)
         return {
             "ok": True,
             "skipped": False,
             "fingerprint": fp,
-            "advice": text,
+            "advice": advice,
+            "alarm_level": alarm_level,
             "meta": ok_meta,
             "request_preview": json.dumps(payload, ensure_ascii=False, indent=2)[:8000],
             "response_preview": text,
@@ -392,7 +541,7 @@ async def force_program_review(
     header = f"🤫 Результат скрытого job: {HIDDEN_TITLE}"
     body = f"{header}\n\n{summary}"
     if advice:
-        body += f"\n\n{ui.b('Совет ИИ')}\n{advice}"
+        body += f"\n\n{ui.b('Совет ИИ')}\n{format_advice_html(advice)}"
     try:
         for i in range(0, len(body), 3500):
             await bot.send_message(admin_telegram_id, body[i : i + 3500])
@@ -414,7 +563,9 @@ def format_program_review_summary(report: dict[str, Any]) -> str:
         return f"Ошибка: {report.get('error') or '?'}"
     fp = str(report.get("fingerprint") or "")[:12]
     chars = len(report.get("advice") or "")
-    return f"OK · fingerprint {fp}… · совет {chars} симв."
+    level = report.get("alarm_level")
+    alarm = f" · {alarm_emoji(level)} {level}/5" if level is not None else ""
+    return f"OK · fingerprint {fp}… · совет {chars} симв.{alarm}"
 
 
 async def load_last_force_preview(session: AsyncSession) -> dict[str, Any] | None:
@@ -428,8 +579,11 @@ async def load_last_force_preview(session: AsyncSession) -> dict[str, Any] | Non
     return data if isinstance(data, dict) else None
 
 
-def format_advice_for_program_card(advice: str | None) -> str | None:
-    text = (advice or "").strip()
-    if not text:
-        return None
-    return f"{ui.b('Совет ИИ')}\n{ui.coach_html(text)}"
+def format_advice_view(advice: str | None, *, alarm_level: int | None = None) -> str:
+    """Full tip screen HTML."""
+    emoji = alarm_emoji(alarm_level)
+    header = f"{ui.b(ui.BTN_PROGRAM_AI)} {emoji}"
+    body = format_advice_html(advice)
+    if not body:
+        return f"{header}\n\nПока нет сохранённого разбора."
+    return f"{header}\n\n{body}"

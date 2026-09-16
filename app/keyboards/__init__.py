@@ -763,6 +763,33 @@ def admin_hidden_program_review_kb(*, running: bool = False) -> InlineKeyboardMa
     )
 
 
+def program_card_kb(alarm_level: int | None) -> InlineKeyboardMarkup | None:
+    """Inline tip button under Program card; None if no review yet."""
+    if alarm_level is None:
+        return None
+    from app.services.program_review import alarm_emoji
+
+    emoji = alarm_emoji(alarm_level)
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"{emoji} {ui.BTN_PROGRAM_AI}",
+                    callback_data="prog:ai",
+                )
+            ]
+        ]
+    )
+
+
+def program_advice_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="prog:back")]
+        ]
+    )
+
+
 def admin_hidden_result_kb(report: dict | None) -> InlineKeyboardMarkup:
     """After force: expand raw preview per athlete."""
     rows: list[list[InlineKeyboardButton]] = []

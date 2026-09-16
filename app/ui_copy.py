@@ -147,6 +147,16 @@ BTN_COACH_WEEK = "📊 Разбор недели"
 BTN_COACH_MONTH = "📅 Разбор месяца"
 BTN_COACH_EXERCISE = "💪 Совет по упражнению"
 BTN_COACH_SET = "🧠 Совет ИИ"
+BTN_PROGRAM_AI = "Совет ИИ"
+
+# Program review alarm 1–5
+PROGRAM_ALARM_EMOJI = {
+    1: "✅",
+    2: "🟡",
+    3: "⚠️",
+    4: "🟠",
+    5: "☠️",
+}
 BTN_COACH_PROMPT = "📜 Промпт и данные"
 BTN_COACH_CLEAR = "🧹 Очистить диалог"
 BTN_COACH_CLEAR_OK = "🗑️ Да, очистить диалог"

@@ -36,8 +36,11 @@ SYSTEM_PROGRAM_REVIEW = """Ты — опытный русскоязычный ф
 Опирайся строго на JSON: schedule, templates[].exercises (порядок position, sets/reps, machine_name).
 Оценивай: покрытие мышечных групп за неделю; баланс push/pull/legs и recovery-дней;
 порядок упражнений внутри дня; адекватность target_sets × target_reps; явные пробелы и перекосы.
-Пиши по делу, без сарказма и без HTML/Markdown. Не ставь меддиагнозов.
-Цифры и названия — только из JSON. Объём ответа — компактный текст для карточки Telegram (~800–1200 символов)."""
+Ответ — СТРОГО один JSON-объект (без markdown, без текста вокруг).
+Поле alarm_level (1–5): 1 = всё ок; 2 = мелкие замечания; 3 = заметные перекосы;
+4 = серьёзные проблемы объёма/порядка; 5 = опасно (перегруз, вред здоровью при типичном выполнении).
+Пиши по делу, без сарказма. Не ставь меддиагнозов. Цифры и названия — только из JSON.
+Тексты секций — обычный текст без HTML/Markdown (** и т.п.)."""
 
 DATA_SCHEMA_RU = """Компактный JSON (без дублей):
 • user — фаза, лог, вес, рост height_cm, стаж, возраст, пол, код (без уровней силы)
@@ -146,15 +149,21 @@ DEFAULT_TASKS: dict[str, str] = {
     ),
     "program_review": (
         "СКРЫТЫЙ job: оценка ОБЩЕЙ программы зала (не персональный разбор).\n"
-        "В JSON только schedule (пн–вс) и templates с упражнениями "
+        "Входной JSON: schedule (пн–вс) и templates с упражнениями "
         "(position, name, machine_name, target_sets, target_reps_min/max, weight_step).\n"
-        "Структура ответа СТРОГО:\n"
-        "1) Покрытие мышц / баланс недели (что закрыто, чего не хватает).\n"
-        "2) Порядок упражнений в днях (логика крупных→мелких, антагонисты).\n"
-        "3) Объём: сеты×репы — мало/норм/много по ключевым зонам.\n"
-        "4) Риски (перекос, подряд тяжёлые дни, дубли).\n"
-        "5) 2–4 конкретных улучшения (что переставить / добавить / урезать).\n"
-        "Без персональных советов. Без HTML. Уложись в ~800–1200 символов."
+        "Ответ СТРОГО один JSON без markdown и без текста вокруг:\n"
+        '{"alarm_level":1,"coverage":"...","order":"...","volume":"...",'
+        '"risks":"...","improvements":"..."}\n'
+        "alarm_level — int 1..5:\n"
+        "1 ✅ всё ок; 2 🟡 мелочи; 3 ⚠️ заметные перекосы; "
+        "4 🟠 серьёзно; 5 ☠️ опасно для здоровья при типичном выполнении.\n"
+        "coverage — покрытие мышц / баланс недели.\n"
+        "order — порядок упражнений в днях.\n"
+        "volume — сеты×репы по ключевым зонам.\n"
+        "risks — риски.\n"
+        "improvements — 2–4 конкретных улучшения.\n"
+        "Каждое текстовое поле: 2–5 коротких предложений, без HTML/Markdown. "
+        "Без персональных советов."
     ),
 }
 
@@ -312,7 +321,8 @@ _KIND_PAYLOAD_BRIEF: dict[str, str] = {
     ),
     "program_review": (
         "Только структура программы: schedule пн–вс + templates/exercises "
-        "(порядок, sets/reps, machine). Без user/sessions/прогресса атлетов."
+        "(порядок, sets/reps, machine). Ответ JSON: alarm_level 1–5 + секции. "
+        "Без user/sessions/прогресса атлетов."
     ),
 }
 
@@ -421,11 +431,13 @@ _KIND_PAYLOAD_FULL: dict[str, str] = {
     ),
     "program_review": (
         "kind=program_review — скрытый разбор программы (общий совет)\n\n"
-        "JSON:\n"
+        "JSON вход:\n"
         "· schedule[]: wd, day, template_id/name/hashtag или rest\n"
         "· templates[]: id, name, hashtag,\n"
         "  exercises[]: id, position, name, machine_name,\n"
         "  target_sets, target_reps_min/max, weight_step\n\n"
+        "Ответ модели — JSON:\n"
+        "· alarm_level 1–5, coverage, order, volume, risks, improvements\n"
         "System: prompt_system_program_review (не Бендер)\n"
         "Нет: user, sessions, exercise_state, notes, live, athletes"
     ),
@@ -457,7 +469,9 @@ PROMPT_SEED_FLAGS: dict[str, tuple[str, str]] = {
     "week_group_prompt_year_history_v1": (f"{SETTING_PREFIX}week_group", "week_group"),
     "week_plan_prompt_year_history_v1": (f"{SETTING_PREFIX}week_plan", "week_plan"),
     "program_review_prompt_v1": (f"{SETTING_PREFIX}program_review", "program_review"),
+    "program_review_prompt_v2": (f"{SETTING_PREFIX}program_review", "program_review"),
     "program_review_system_v1": (SETTING_SYSTEM_PROGRAM_REVIEW, "program_review_system"),
+    "program_review_system_v2": (SETTING_SYSTEM_PROGRAM_REVIEW, "program_review_system"),
 }
 
 

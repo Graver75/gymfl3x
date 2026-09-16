@@ -1849,7 +1849,9 @@ async def adm_hidden_go(callback: CallbackQuery) -> None:
         text = f"{ui.BTN_ADM_HIDDEN_AI}\n\n{status}"
         advice = (report.get("advice") or "")[:1500]
         if advice:
-            text += f"\n\n{ui.b('Совет ИИ')}\n{ui.esc(advice)}"
+            from app.services.program_review import format_advice_html
+
+            text += f"\n\n{ui.b('Совет ИИ')}\n{format_advice_html(advice)}"
         if len(text) > 4000:
             text = text[:3990] + "…"
         kb = admin_hidden_kb(running=False)
