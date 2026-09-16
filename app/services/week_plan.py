@@ -766,6 +766,7 @@ async def send_admin_result_messages(
 
 async def maybe_run_scheduled_week_plan(bot: Bot | None = None) -> None:
     """Same hour/weekday as week digests; dedup via RecapSent chat_id=0."""
+    global _job_running
     from app.services.reminders import _already_sent, _mark_sent
 
     settings = get_settings()
@@ -787,7 +788,6 @@ async def maybe_run_scheduled_week_plan(bot: Bot | None = None) -> None:
         return
 
     async with _job_lock:
-        global _job_running
         _job_running = {
             "scope": "cron",
             "started_at": datetime.now(timezone.utc).isoformat(),
