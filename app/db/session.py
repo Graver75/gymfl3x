@@ -32,6 +32,13 @@ async def _add_missing_columns(conn) -> None:
             text("ALTER TABLE template_exercises ADD COLUMN machine_name VARCHAR(128)")
         )
 
+    result = await conn.execute(text("PRAGMA table_info(exercise_archive)"))
+    arch_cols = {row[1] for row in result}
+    if arch_cols and "machine_name" not in arch_cols:
+        await conn.execute(
+            text("ALTER TABLE exercise_archive ADD COLUMN machine_name VARCHAR(128)")
+        )
+
     result = await conn.execute(text("PRAGMA table_info(user_exercise_state)"))
     cols = {row[1] for row in result}
     if "note" not in cols:

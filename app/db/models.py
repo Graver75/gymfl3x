@@ -257,6 +257,8 @@ class ExerciseArchive(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(128))
     name_key: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    # Canonical equipment label — shared by all TemplateExercise copies of this name
+    machine_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     target_sets: Mapped[int] = mapped_column(Integer, default=3)
     target_reps_min: Mapped[int] = mapped_column(Integer, default=8)
     target_reps_max: Mapped[int] = mapped_column(Integer, default=12)

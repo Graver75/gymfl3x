@@ -48,7 +48,9 @@ from app.keyboards import (
 from app.services.archive import (
     add_exercise_to_template,
     list_archive,
+    list_instances_by_name,
     name_key,
+    set_machine_for_exercise_name,
     sync_catalog,
     upsert_archive,
 )
@@ -452,6 +454,7 @@ async def adm_ex_from_archive(callback: CallbackQuery) -> None:
             target_reps_min=item.target_reps_min,
             target_reps_max=item.target_reps_max,
             weight_step=item.weight_step,
+            machine_name=getattr(item, "machine_name", None),
         )
         added_name = item.name
         if added is None:
@@ -642,7 +645,10 @@ async def adm_ex_rename_save(message: Message, state: FSMContext) -> None:
             await state.clear()
             await message.answer("Упражнение уже удалено.")
             return
+        old_name = ex.name
+        machine = ex.machine_name
         ex.name = name[:128]
+        # Carry machine to new archive key + sync all copies under the new name
         await upsert_archive(
             session,
             ex.name,
@@ -650,8 +656,11 @@ async def adm_ex_rename_save(message: Message, state: FSMContext) -> None:
             target_reps_min=ex.target_reps_min,
             target_reps_max=ex.target_reps_max,
             weight_step=ex.weight_step,
+            machine_name=machine,
             overwrite_targets=True,
+            overwrite_machine=True,
         )
+        n = await set_machine_for_exercise_name(session, ex.name, machine)
         await session.commit()
         tpl = await session.get(WorkoutTemplate, ex.template_id)
         tpl_name = tpl.name if tpl else "?"
@@ -660,8 +669,11 @@ async def adm_ex_rename_save(message: Message, state: FSMContext) -> None:
     back = _ex_back_from_data(data, tpl_id)
     await state.clear()
     await state.update_data(ex_back=back)
+    note = ""
+    if name_key(old_name) != name_key(name):
+        note = f"\nТренажёр синхронизирован для {n} копий под новым именем."
     await message.answer(
-        f"Название обновлено.\n\n{text}",
+        f"Название обновлено.{note}\n\n{text}",
         reply_markup=exercise_edit_kb(ex_id, tpl_id, back=back),
     )
 
@@ -678,10 +690,15 @@ async def adm_ex_machine_start(callback: CallbackQuery, state: FSMContext) -> No
     async with SessionLocal() as session:
         ex = await session.get(TemplateExercise, ex_id)
         current = (ex.machine_name if ex else None) or "—"
+        siblings = 0
+        if ex:
+            siblings = len(await list_instances_by_name(session, ex.name))
     await state.set_state(AdminSG.edit_exercise_machine)
     await state.update_data(exercise_id=ex_id, ex_back=data.get("ex_back"))
     await callback.message.answer(
         f"Тренажёр сейчас: {current}\n"
+        f"Это свойство прообраза — обновится во всех днях "
+        f"({siblings} копий).\n"
         "Новое название (для ИИ), или «-» / «нет» чтобы очистить:"
     )
     await callback.answer()
@@ -704,8 +721,9 @@ async def adm_ex_machine_save(message: Message, state: FSMContext) -> None:
             await state.clear()
             await message.answer("Упражнение уже удалено.")
             return
-        ex.machine_name = machine
+        n = await set_machine_for_exercise_name(session, ex.name, machine)
         await session.commit()
+        await session.refresh(ex)
         tpl = await session.get(WorkoutTemplate, ex.template_id)
         tpl_name = tpl.name if tpl else "?"
         tpl_id = ex.template_id
@@ -714,7 +732,7 @@ async def adm_ex_machine_save(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.update_data(ex_back=back)
     await message.answer(
-        f"Тренажёр обновлён.\n\n{text}",
+        f"Тренажёр обновлён во всех копиях ({n}).\n\n{text}",
         reply_markup=exercise_edit_kb(ex_id, tpl_id, back=back),
     )
 
@@ -990,6 +1008,7 @@ async def adm_archive_view(callback: CallbackQuery) -> None:
                 names.append(tpl.name)
         text = (
             f"{item.name}\n"
+            f"Тренажёр: {item.machine_name or '—'}\n"
             f"Цель: {item.target_sets}×{item.target_reps_min}-{item.target_reps_max}, "
             f"шаг {item.weight_step:g} кг\n"
             f"Сейчас в шаблонах: {', '.join(names) if names else 'нигде (только архив)'}"

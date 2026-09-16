@@ -107,6 +107,7 @@ def free_from_archive(item) -> FreeExercise:
         target_reps_min=item.target_reps_min or 8,
         target_reps_max=item.target_reps_max or 12,
         weight_step=item.weight_step or 2.5,
+        machine_name=getattr(item, "machine_name", None),
     )
 
 
@@ -123,5 +124,6 @@ async def resolve_exercise(session, data: dict):
             target_reps_min=int(free.get("target_reps_min") or 8),
             target_reps_max=int(free.get("target_reps_max") or 12),
             weight_step=float(free.get("weight_step") or 2.5),
+            machine_name=free.get("machine_name"),
         )
     return None

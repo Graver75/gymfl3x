@@ -59,6 +59,11 @@ async def main() -> None:
         from app.services.coach_prompts import ensure_prompt_seeds
 
         await ensure_prompt_seeds(session)
+        from app.services.archive import sync_machines_from_archive
+
+        synced_m = await sync_machines_from_archive(session)
+        if synced_m:
+            logger.info("Machine names reconciled across templates: %s rows", synced_m)
 
     bot = Bot(
         token=settings.bot_token,
