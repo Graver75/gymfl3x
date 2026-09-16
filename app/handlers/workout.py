@@ -177,16 +177,26 @@ def _set_prompt(data: dict) -> str:
     return ui.label_set(set_no, drop)
 
 
-def _weight_kb_from_data(exercise, ex_state, data: dict, draft: float | None = None):
+async def _weight_kb_from_data(
+    exercise,
+    ex_state,
+    data: dict,
+    draft: float | None = None,
+):
     return weight_kb(
         exercise,
         ex_state,
         draft if draft is not None else data.get("draft_weight"),
         weight_options=data.get("smart_weight_options"),
+        show_coach=await get_nn_status() == NnStatus.online,
     )
 
 
-def _reps_kb_from_data(exercise, data: dict, last_reps: int | None = None):
+async def _reps_kb_from_data(
+    exercise,
+    data: dict,
+    last_reps: int | None = None,
+):
     preferred = data.get("smart_default_reps")
     if preferred is None:
         preferred = last_reps
@@ -195,8 +205,16 @@ def _reps_kb_from_data(exercise, data: dict, last_reps: int | None = None):
         exercise.target_reps_max,
         preferred,
         reps_options=data.get("smart_reps_options"),
+        show_coach=await get_nn_status() == NnStatus.online,
     )
 
+
+async def _after_set_kb(target_sets: int, done_sets: int):
+    return after_set_kb(
+        target_sets,
+        done_sets,
+        show_coach=await get_nn_status() == NnStatus.online,
+    )
 
 async def _load_presets_into_state(
     state: FSMContext,
@@ -557,11 +575,11 @@ async def workout_arch_pick(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     async with SessionLocal() as session:
         exercise = await resolve_exercise(session, data)
-        kb = _weight_kb_from_data(exercise, None, data)
+        kb = await _weight_kb_from_data(exercise, None, data)
     target = f"{free['target_sets']}×{free['target_reps_min']}-{free['target_reps_max']}"
     await callback.message.edit_text(
         f"{ui.label_exercise(exercise_name)}\n{ui.label_target(target)}{loaded['hint']}"
-        f"{rest_line(data)}\n\n{_set_prompt(data)}\nВыбери вес:",
+        f"{rest_line(data)}\n\n{_set_prompt(data)}\nВыбери вес или напиши число:",
         reply_markup=kb,
     )
     await callback.answer()
@@ -642,7 +660,7 @@ async def pick_exercise(callback: CallbackQuery, state: FSMContext) -> None:
             session, callback.from_user.id, callback.from_user.full_name or "Athlete"
         )
         ex_state = await _get_state(session, user.id, exercise_id)
-        kb = _weight_kb_from_data(exercise, ex_state, data)
+        kb = await _weight_kb_from_data(exercise, ex_state, data)
 
     extra = ""
     pr_line = format_pr_line(pr)
@@ -652,7 +670,7 @@ async def pick_exercise(callback: CallbackQuery, state: FSMContext) -> None:
         extra += f"\n{ui.ICO_NOTE} Заметка: {note}"
     await callback.message.edit_text(
         f"{ui.label_exercise(exercise.name)}\n{ui.label_target(target)}{loaded['hint']}{extra}"
-        f"{rest_line(data)}\n\n{_set_prompt(data)}\nВыбери вес:",
+        f"{rest_line(data)}\n\n{_set_prompt(data)}\nВыбери вес или напиши число:",
         reply_markup=kb,
     )
     await callback.answer()
@@ -856,9 +874,7 @@ async def pick_weight(callback: CallbackQuery, state: FSMContext) -> None:
     draft = float(data.get("draft_weight") or 20.0)
 
     if action == "custom":
-        await state.set_state(WorkoutSG.custom_weight)
-        await callback.message.answer("Введи вес числом, например 55 или 57.5")
-        await callback.answer()
+        await callback.answer("Напиши вес числом в чат", show_alert=True)
         return
 
     if action == "+":
@@ -885,37 +901,28 @@ async def pick_weight(callback: CallbackQuery, state: FSMContext) -> None:
             last_reps = ex_state.last_reps if ex_state else None
             await callback.message.edit_text(
                 f"{ui.label_exercise(exercise.name)}\n{_set_prompt(data)}\nВес: {draft:g} кг"
-                f"{rest_line(data)}\nСколько повторений?",
-                reply_markup=_reps_kb_from_data(exercise, data, last_reps),
+                f"{rest_line(data)}\nСколько повторений? (или напиши число)",
+                reply_markup=await _reps_kb_from_data(exercise, data, last_reps),
             )
             await callback.answer()
             return
 
         await callback.message.edit_reply_markup(
-            reply_markup=_weight_kb_from_data(exercise, ex_state, data, draft)
+            reply_markup=await _weight_kb_from_data(exercise, ex_state, data, draft)
         )
     await callback.answer(f"{draft:g} кг")
 
 
-@router.message(WorkoutSG.custom_weight)
-async def custom_weight(message: Message, state: FSMContext) -> None:
-    if message.from_user is None:
-        return
-    try:
-        weight = float((message.text or "").replace(",", "."))
-        if weight < 0 or weight > 500:
-            raise ValueError
-    except ValueError:
-        await message.answer("Число кг, например 40.")
-        return
-
+async def _apply_typed_weight(message: Message, state: FSMContext, weight: float) -> None:
     await state.update_data(draft_weight=weight, last_action_at=touch_action_iso())
     data = await state.get_data()
 
     async with SessionLocal() as session:
         exercise = await resolve_exercise(session, data)
         user = await get_or_create_user(
-            session, message.from_user.id, message.from_user.full_name or "Athlete"
+            session,
+            message.from_user.id,
+            message.from_user.full_name or "Athlete",
         )
         ex_state = None
         if data.get("exercise_id"):
@@ -924,18 +931,66 @@ async def custom_weight(message: Message, state: FSMContext) -> None:
 
     await state.set_state(WorkoutSG.reps)
     await message.answer(
-        f"{_set_prompt(data)}\nВес: {weight:g} кг{rest_line(data)}\nСколько повторений?",
-        reply_markup=_reps_kb_from_data(exercise, data, last_reps),
+        f"{_set_prompt(data)}\nВес: {weight:g} кг{rest_line(data)}\n"
+        f"Сколько повторений? (или напиши число)",
+        reply_markup=await _reps_kb_from_data(exercise, data, last_reps),
     )
+
+
+@router.message(WorkoutSG.weight)
+async def typed_weight(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    try:
+        weight = float((message.text or "").replace(",", ".").strip())
+        if weight < 0 or weight > 500:
+            raise ValueError
+    except ValueError:
+        await message.answer("Число кг, например 40 или 57.5")
+        return
+    await _apply_typed_weight(message, state, weight)
+
+
+@router.message(WorkoutSG.custom_weight)
+async def custom_weight(message: Message, state: FSMContext) -> None:
+    """Legacy state — same as typed weight on the weight screen."""
+    if message.from_user is None:
+        return
+    try:
+        weight = float((message.text or "").replace(",", ".").strip())
+        if weight < 0 or weight > 500:
+            raise ValueError
+    except ValueError:
+        await message.answer("Число кг, например 40.")
+        return
+    await _apply_typed_weight(message, state, weight)
 
 
 @router.callback_query(WorkoutSG.reps, F.data == "wo:r:custom")
 async def custom_reps_start(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.message is None:
         return
-    await state.set_state(WorkoutSG.custom_reps)
-    await callback.message.answer("Введи число повторений, например 11 или 7")
-    await callback.answer()
+    await callback.answer("Напиши число повторений в чат", show_alert=True)
+
+
+@router.message(WorkoutSG.reps)
+async def typed_reps(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    try:
+        reps = int((message.text or "").strip())
+        if reps < 0 or reps > 200:
+            raise ValueError
+    except ValueError:
+        await message.answer("Целое число повторений, например 11.")
+        return
+    await _append_reps_and_continue(
+        message,
+        state,
+        reps,
+        from_user_id=message.from_user.id,
+        from_user_name=message.from_user.full_name or "Athlete",
+    )
 
 
 @router.message(WorkoutSG.custom_reps)
@@ -1031,7 +1086,7 @@ async def _show_after_set(target: Message, state: FSMContext, *, edit: bool = Fa
         f"{ui.label_exercise(name)}\n{format_logged_parts(logged)}"
         f"{rest_line(data)}\n\nЧто дальше?"
     )
-    kb = after_set_kb(target_sets, _unique_set_count(logged))
+    kb = await _after_set_kb(target_sets, _unique_set_count(logged))
     if edit:
         await target.edit_text(text, reply_markup=kb)
     else:
@@ -1113,11 +1168,11 @@ async def next_set(callback: CallbackQuery, state: FSMContext) -> None:
         ex_state = None
         if data.get("exercise_id"):
             ex_state = await _get_state(session, user.id, data["exercise_id"])
-        kb = _weight_kb_from_data(exercise, ex_state, data)
+        kb = await _weight_kb_from_data(exercise, ex_state, data)
 
     await callback.message.edit_text(
         f"{ui.label_exercise(name)}\n{format_logged_parts(logged)}\n\n{_set_prompt(data)}"
-        f"{rest_line(data)}\nВыбери вес:",
+        f"{rest_line(data)}\nВыбери вес или напиши число:",
         reply_markup=kb,
     )
     await callback.answer()
@@ -1189,11 +1244,11 @@ async def drop_set(callback: CallbackQuery, state: FSMContext) -> None:
         ex_state = None
         if data.get("exercise_id"):
             ex_state = await _get_state(session, user.id, data["exercise_id"])
-        kb = _weight_kb_from_data(exercise, ex_state, data)
+        kb = await _weight_kb_from_data(exercise, ex_state, data)
 
     await callback.message.edit_text(
         f"{ui.label_exercise(name)}\n{format_logged_parts(logged)}\n\n{_set_prompt(data)}"
-        f"{rest_line(data)}\nДроп — выбери вес:",
+        f"{rest_line(data)}\nДроп — выбери вес или напиши число:",
         reply_markup=kb,
     )
     await callback.answer()
@@ -1227,9 +1282,9 @@ async def undo_segment(callback: CallbackQuery, state: FSMContext) -> None:
             if data.get("exercise_id"):
                 ex_state = await _get_state(session, user.id, data["exercise_id"])
             data = await state.get_data()
-            kb = _weight_kb_from_data(exercise, ex_state, data, float(last["weight"]))
+            kb = await _weight_kb_from_data(exercise, ex_state, data, float(last["weight"]))
         await callback.message.edit_text(
-            f"{ui.label_exercise(exercise.name)}\n{_set_prompt(data)}{rest_line(data)}\nВыбери вес:",
+            f"{ui.label_exercise(exercise.name)}\n{_set_prompt(data)}{rest_line(data)}\nВыбери вес или напиши число:",
             reply_markup=kb,
         )
         await callback.answer("Отменил")
@@ -1243,7 +1298,7 @@ async def undo_segment(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     await callback.message.edit_text(
         f"{ui.label_exercise(name)}\n{format_logged_parts(logged)}{rest_line(data)}\n\nЧто дальше?",
-        reply_markup=after_set_kb(target_sets, _unique_set_count(logged)),
+        reply_markup=await _after_set_kb(target_sets, _unique_set_count(logged)),
     )
     await callback.answer("Отменил")
 
@@ -1433,8 +1488,8 @@ async def workout_back(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.message.edit_text(
             f"{ui.label_exercise(exercise.name)}\n{_set_prompt(data)}\n"
             f"Вес: {float(data.get('draft_weight') or 20):g} кг"
-            f"{rest_line(data)}\nСколько повторений?",
-            reply_markup=_reps_kb_from_data(exercise, data, last_reps),
+            f"{rest_line(data)}\nСколько повторений? (или напиши число)",
+            reply_markup=await _reps_kb_from_data(exercise, data, last_reps),
         )
     elif current == WorkoutSG.difficulty.state:
         await state.set_state(WorkoutSG.after_set)
@@ -1445,7 +1500,7 @@ async def workout_back(callback: CallbackQuery, state: FSMContext) -> None:
         logged = data.get("logged") or []
         await callback.message.edit_text(
             f"{ui.label_exercise(name)}\n{format_logged_parts(logged)}{rest_line(data)}\n\nЧто дальше?",
-            reply_markup=after_set_kb(target_sets, _unique_set_count(logged)),
+            reply_markup=await _after_set_kb(target_sets, _unique_set_count(logged)),
         )
     elif current in {WorkoutSG.reps.state, WorkoutSG.custom_reps.state}:
         await state.set_state(WorkoutSG.weight)
@@ -1457,11 +1512,11 @@ async def workout_back(callback: CallbackQuery, state: FSMContext) -> None:
             ex_state = None
             if data.get("exercise_id"):
                 ex_state = await _get_state(session, user.id, data["exercise_id"])
-            kb = _weight_kb_from_data(
+            kb = await _weight_kb_from_data(
                 exercise, ex_state, data, float(data.get("draft_weight") or 20)
             )
         await callback.message.edit_text(
-            f"{ui.label_exercise(exercise.name)}\n{_set_prompt(data)}{rest_line(data)}\nВыбери вес:",
+            f"{ui.label_exercise(exercise.name)}\n{_set_prompt(data)}{rest_line(data)}\nВыбери вес или напиши число:",
             reply_markup=kb,
         )
     elif current in {WorkoutSG.weight.state, WorkoutSG.custom_weight.state, WorkoutSG.after_set.state}:
@@ -1474,7 +1529,7 @@ async def workout_back(callback: CallbackQuery, state: FSMContext) -> None:
                 name = exercise.name if exercise else "Упражнение"
             await callback.message.edit_text(
                 f"{ui.label_exercise(name)}\n{format_logged_parts(logged)}{rest_line(data)}\n\nЧто дальше?",
-                reply_markup=after_set_kb(target_sets, _unique_set_count(logged)),
+                reply_markup=await _after_set_kb(target_sets, _unique_set_count(logged)),
             )
             await callback.answer()
             return

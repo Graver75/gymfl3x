@@ -35,8 +35,8 @@ def rest_line(data: dict) -> str:
         elapsed = int((datetime.now(timezone.utc) - started).total_seconds())
     except ValueError:
         return ""
-    if elapsed < 0:
-        elapsed = 0
+    if elapsed < 1:
+        return ""
     minutes, seconds = divmod(elapsed, 60)
     if minutes >= 60:
         hours, minutes = divmod(minutes, 60)

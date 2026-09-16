@@ -1653,8 +1653,14 @@ async def adm_nn_load(callback: CallbackQuery) -> None:
         return
     from aiogram.exceptions import TelegramBadRequest
 
-    from app.services.nn_client import fetch_nn_load
+    from app.services.nn_client import (
+        fetch_nn_load,
+        get_nn_status,
+        invalidate_status_cache,
+    )
 
+    invalidate_status_cache()
+    await get_nn_status(force=True)
     data = await fetch_nn_load()
     text = _format_nn_load(data)
     try:

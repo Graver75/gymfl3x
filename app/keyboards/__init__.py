@@ -235,6 +235,7 @@ def weight_kb(
     draft_weight: float | None = None,
     *,
     weight_options: list[float] | None = None,
+    show_coach: bool = False,
 ) -> InlineKeyboardMarkup:
     step = exercise.weight_step or 2.5
     base = draft_weight
@@ -245,11 +246,12 @@ def weight_kb(
             base = state.working_weight
         else:
             base = 20.0
+    base = float(base)
 
     buttons = [
         [
             InlineKeyboardButton(text=f"−{step:g}", callback_data=f"wo:w:-:{step}"),
-            InlineKeyboardButton(text=f"{base:g} кг", callback_data=f"wo:w:=:{base}"),
+            InlineKeyboardButton(text=f"{base:g}", callback_data=f"wo:w:=:{base}"),
             InlineKeyboardButton(text=f"+{step:g}", callback_data=f"wo:w:+:{step}"),
         ]
     ]
@@ -258,24 +260,25 @@ def weight_kb(
     if weight_options:
         values.extend(weight_options)
     else:
-        for delta in (-step * 2, 0, step * 2):
+        for delta in (-step * 2, step * 2, -step, step):
             values.append(max(0.0, base + delta))
     seen: set[float] = set()
     for val in values:
         key = round(float(val), 2)
         if key in seen:
             continue
+        if abs(float(val) - base) < 0.01:
+            continue  # current weight already in the ± row
         seen.add(key)
-        mark = "✓ " if abs(float(val) - float(base)) < 0.01 else ""
         presets.append(
-            InlineKeyboardButton(text=f"{mark}{val:g}", callback_data=f"wo:w:=:{val}")
+            InlineKeyboardButton(text=f"{val:g}", callback_data=f"wo:w:=:{val}")
         )
         if len(presets) >= 6:
             break
     for i in range(0, len(presets), 3):
         buttons.append(presets[i : i + 3])
-    buttons.append([InlineKeyboardButton(text=ui.BTN_ENTER_WEIGHT, callback_data="wo:w:custom")])
-    buttons.append([InlineKeyboardButton(text=ui.BTN_COACH_SET, callback_data="wo:coach")])
+    if show_coach:
+        buttons.append([InlineKeyboardButton(text=ui.BTN_COACH_SET, callback_data="wo:coach")])
     buttons.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="wo:back")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -286,6 +289,7 @@ def reps_kb(
     last_reps: int | None = None,
     *,
     reps_options: list[int] | None = None,
+    show_coach: bool = False,
 ) -> InlineKeyboardMarkup:
     options = list(reps_options or [8, 10, 12, 15])
     for value in (target_min, target_max, last_reps):
@@ -301,8 +305,8 @@ def reps_kb(
     ]
     rows = [row[i : i + 4] for i in range(0, len(row), 4)]
     rows.append([InlineKeyboardButton(text=ui.BTN_REP_FAIL, callback_data="wo:r:0")])
-    rows.append([InlineKeyboardButton(text=ui.BTN_ENTER_REPS, callback_data="wo:r:custom")])
-    rows.append([InlineKeyboardButton(text=ui.BTN_COACH_SET, callback_data="wo:coach")])
+    if show_coach:
+        rows.append([InlineKeyboardButton(text=ui.BTN_COACH_SET, callback_data="wo:coach")])
     rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="wo:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -319,17 +323,19 @@ def sets_kb(target_sets: int, last_sets: int | None = None) -> InlineKeyboardMar
     )
 
 
-def after_set_kb(target_sets: int, done_sets: int) -> InlineKeyboardMarkup:
+def after_set_kb(
+    target_sets: int, done_sets: int, *, show_coach: bool = False
+) -> InlineKeyboardMarkup:
     more = ui.more_set_label(target_sets, done_sets)
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=more, callback_data="wo:more")],
-            [InlineKeyboardButton(text=ui.BTN_DROP_SET, callback_data="wo:drop")],
-            [InlineKeyboardButton(text=ui.BTN_EX_DONE, callback_data="wo:exdone")],
-            [InlineKeyboardButton(text=ui.BTN_UNDO_SET, callback_data="wo:undo")],
-            [InlineKeyboardButton(text=ui.BTN_COACH_SET, callback_data="wo:coach")],
-        ]
-    )
+    rows = [
+        [InlineKeyboardButton(text=more, callback_data="wo:more")],
+        [InlineKeyboardButton(text=ui.BTN_DROP_SET, callback_data="wo:drop")],
+        [InlineKeyboardButton(text=ui.BTN_EX_DONE, callback_data="wo:exdone")],
+        [InlineKeyboardButton(text=ui.BTN_UNDO_SET, callback_data="wo:undo")],
+    ]
+    if show_coach:
+        rows.append([InlineKeyboardButton(text=ui.BTN_COACH_SET, callback_data="wo:coach")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def onboarding_sex_kb() -> InlineKeyboardMarkup:
