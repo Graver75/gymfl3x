@@ -233,17 +233,19 @@ _KIND_PAYLOAD_BRIEF: dict[str, str] = {
         "каждого). Окно ~14 дн. Без week schedule / target_exercises."
     ),
     "week": (
-        "Один атлет · окно до 365 дн · до 80 сессий (свежие с полным by_ex, "
-        "старые компакт). user+height, adherence, aggregates, BW(~52), notes, "
-        "все exercise_state с весами, schedule пн–вс. Без live / athletes."
+        "Один атлет · до 365 дн. Личное: phase/bw/height/sex/age/exp_m/code. "
+        "Прогресс: sessions (год), exercise_state (ww/sw/streak), notes, "
+        "adherence, aggregates, BW(~52), schedule пн–вс. Без live / athletes."
     ),
     "week_group": (
-        "athletes[] — у каждого тот же week-контекст (год истории). "
+        "athletes[] — у каждого полный week-контекст (личное + год прогресса). "
         "Фокус вердикта — текущая неделя. Без target_exercises."
     ),
     "week_plan": (
-        "Как week (год) + target_exercises[] (id/name/machine/targets) "
-        "и week_start. Ответ — JSON плана, не текст в чат."
+        "ДА, полное досье атлета как у week: phase/вес/рост/пол/возраст/стаж "
+        "(exp_m)/код + год сессий + working weights + notes + adherence/BW + "
+        "schedule. Плюс week_start и target_exercises[] (id/name/machine/targets). "
+        "Ответ — JSON плана, не текст в чат."
     ),
     "month": (
         "Один атлет · ~45 дн · до 18 сессий. user, sessions (by_ex), "
@@ -302,32 +304,40 @@ _KIND_PAYLOAD_FULL: dict[str, str] = {
     "week": (
         "kind=week\n"
         "window_days=365 · max_sessions=80 · recent_full≈16\n\n"
-        "Корни:\n"
-        "· user (+ height_cm)\n"
-        "· schedule[]: wd, date, tpl, tpl_id (пн–вс)\n"
-        "· sessions[]:\n"
-        "  recent — by_ex с полными kg/reps, sets_n (рабочие), parts_n (с дропами),\n"
-        "  checkin, machine m, diff, rpe_avg\n"
-        "  older — date, tpl, vol, sets_n, parts_n, top[2] по объёму\n"
-        "· exercise_state — все с ww/sw/streak/note (до ~60)\n"
-        "· notes (до ~40), adherence, aggregates, body_weight_series (~52 точек)\n\n"
-        "Нет: live, athletes, target_exercises"
+        "Личный профиль (user):\n"
+        "· phase (медовый/средний/плато), log_level\n"
+        "· bw, height_cm, sex, age, exp_m (стаж в месяцах), code\n\n"
+        "Прогресс / история:\n"
+        "· schedule[] пн–вс (tpl)\n"
+        "· sessions[] — recent: by_ex kg/reps, sets_n/parts_n, checkin, m, diff, rpe;\n"
+        "  older (до года): date/tpl/vol/sets_n/parts_n/top[2]\n"
+        "· exercise_state[] — ww/sw/last_reps/sets/diff/hard_streak/note/m (до ~60)\n"
+        "· notes[], adherence, aggregates, body_weight_series (~52)\n\n"
+        "Нет: live, athletes, target_exercises, уровни силы"
     ),
     "week_group": (
         "kind=week_group\n"
-        "athletes[] — у каждого полный week-payload (год истории).\n"
-        "Фокус текста — текущая неделя; год для тренда.\n"
-        "sets_n ≠ parts_n.\n\n"
+        "athletes[] — у каждого полный week-payload:\n"
+        "личное (phase/bw/height/sex/age/exp_m) + год прогресса.\n"
+        "Фокус текста — текущая неделя; год для тренда.\n\n"
         "Нет: target_exercises, live"
     ),
     "week_plan": (
-        "kind=week_plan\n"
-        "База как week (365д) +\n"
+        "kind=week_plan — скрытый прогноз (не в чат)\n"
+        "База = тот же build_coach_context(kind=week_plan), что и week:\n\n"
+        "Личное (да, попадает):\n"
+        "· user.phase, log_level, bw, height_cm, sex, age, exp_m, code\n\n"
+        "Прогресс (да, попадает):\n"
+        "· sessions до 365д (свежие полные by_ex, старые компакт)\n"
+        "· exercise_state (рабочие/suggested веса, streak, notes)\n"
+        "· notes, adherence, aggregates, body_weight_series, schedule\n\n"
+        "Дополнительно только для week_plan:\n"
         "· week_start\n"
         "· target_exercises[]: exercise_id, name, machine_name,\n"
         "  target_sets, target_reps_min/max, weight_step\n"
-        "· chunk (если дробление)\n\n"
-        "Ответ модели: JSON {exercises:[{exercise_id, advice, sets[{n,kg,reps,rpe}]}]}"
+        "· chunk (если дробление большого дня)\n\n"
+        "Ответ модели: JSON {exercises:[{exercise_id, advice, sets[{n,kg,reps,rpe}]}]}\n"
+        "Нет: live, athletes[], уровни силы"
     ),
     "month": (
         "kind=month\n"
