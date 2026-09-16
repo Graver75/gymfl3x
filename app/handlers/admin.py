@@ -2830,3 +2830,127 @@ async def adm_nn_set_provider(callback: CallbackQuery) -> None:
         ),
     )
     await callback.answer(f"Активен: {spec.label}")
+
+
+_ACT_LOG_PAGE = 8
+
+
+def _parse_actlogs_callback(data: str) -> tuple[int | None, int]:
+    """Parse adm:actlogs:{page} or adm:actlogs:u:{uid}:{page} -> (user_id|None, page)."""
+    parts = data.split(":")
+    # adm actlogs 0
+    # adm actlogs u 12 0
+    if len(parts) >= 5 and parts[2] == "u":
+        return int(parts[3]), int(parts[4])
+    return None, int(parts[2])
+
+
+def _parse_actlog_detail_callback(data: str) -> tuple[int, int | None, int]:
+    """Parse adm:actlog:{id}:{page} or adm:actlog:{id}:u:{uid}:{page}."""
+    parts = data.split(":")
+    # adm actlog 5 0
+    # adm actlog 5 u 12 0
+    log_id = int(parts[2])
+    if len(parts) >= 6 and parts[3] == "u":
+        return log_id, int(parts[4]), int(parts[5])
+    page = int(parts[3]) if len(parts) > 3 else 0
+    return log_id, None, page
+
+
+def _format_action_log_card(row: dict) -> str:
+    when = ui.format_user_datetime(row.get("created_at"))
+    code = ui.esc(row.get("code") or "?")
+    name = ui.esc(row.get("name") or "—")
+    label = ui.esc(row.get("label") or row.get("action") or "?")
+    action = ui.esc(row.get("action") or "?")
+    detail = ui.esc(row.get("detail") or "—")
+    et = row.get("entity_type")
+    eid = row.get("entity_id")
+    entity = f"{et}#{eid}" if et else "—"
+    return (
+        f"{ui.BTN_ADM_ACTION_LOGS}\n"
+        f"#{row.get('id')} · {when}\n"
+        f"{code} · {name}\n"
+        f"{label} (<code>{action}</code>)\n"
+        f"Деталь: {detail}\n"
+        f"Сущность: {ui.esc(entity)}"
+    )
+
+
+@router.callback_query(F.data.startswith("adm:actlogs:"))
+async def adm_action_logs(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    user = await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin")
+    if not user:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    from app.keyboards import admin_action_logs_kb
+    from app.services.user_actions import list_actions
+
+    try:
+        filter_uid, page = _parse_actlogs_callback(callback.data)
+    except (ValueError, IndexError):
+        filter_uid, page = None, 0
+    page = max(0, page)
+    async with SessionLocal() as session:
+        items, total = await list_actions(
+            session,
+            user_id=filter_uid,
+            offset=page * _ACT_LOG_PAGE,
+            limit=_ACT_LOG_PAGE,
+        )
+        who = ""
+        if filter_uid is not None:
+            target = await session.get(User, filter_uid)
+            if target:
+                who = f" · {target.short_code} {target.display_name}"
+    text = (
+        f"{ui.BTN_ADM_ACTION_LOGS}{who}\n"
+        f"Всего: {total}. Нажми строку — полный detail."
+    )
+    await safe_edit_text(
+        callback.message,
+        text,
+        reply_markup=admin_action_logs_kb(
+            items,
+            page=page,
+            total=total,
+            page_size=_ACT_LOG_PAGE,
+            user_id=filter_uid,
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(
+    F.data.startswith("adm:actlog:") & ~F.data.startswith("adm:actlogs:")
+)
+async def adm_action_log_detail(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    user = await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin")
+    if not user:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    from app.keyboards import admin_action_log_detail_kb
+    from app.services.user_actions import get_action
+
+    try:
+        log_id, filter_uid, page = _parse_actlog_detail_callback(callback.data)
+    except (ValueError, IndexError):
+        await callback.answer("Битый id", show_alert=True)
+        return
+    async with SessionLocal() as session:
+        row = await get_action(session, log_id)
+    if not row:
+        await callback.answer("Не найдено", show_alert=True)
+        return
+    await safe_edit_text(
+        callback.message,
+        _format_action_log_card(row),
+        reply_markup=admin_action_log_detail_kb(
+            log_id, page, user_id=filter_uid
+        ),
+    )
+    await callback.answer()

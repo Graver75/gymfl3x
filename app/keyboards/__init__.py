@@ -458,6 +458,11 @@ def admin_menu_kb(*, full: bool = True) -> InlineKeyboardMarkup:
                 ],
                 [InlineKeyboardButton(text=ui.BTN_ADM_MISSING, callback_data="adm:missing")],
                 [InlineKeyboardButton(text=ui.BTN_ADM_USERS, callback_data="adm:users")],
+                [
+                    InlineKeyboardButton(
+                        text=ui.BTN_ADM_ACTION_LOGS, callback_data="adm:actlogs:0"
+                    )
+                ],
                 [InlineKeyboardButton(text=ui.BTN_ADM_CHATS, callback_data="adm:chats")],
                 [InlineKeyboardButton(text=ui.BTN_ADM_LEVELS, callback_data="adm:levels")],
                 [InlineKeyboardButton(text=ui.BTN_ADM_SNAPSHOT, callback_data="adm:snapshot")],
@@ -996,6 +1001,83 @@ def admin_nn_log_chunk_kb(
     )
 
 
+def admin_action_logs_kb(
+    items: list[dict],
+    *,
+    page: int,
+    total: int,
+    page_size: int = 8,
+    user_id: int | None = None,
+) -> InlineKeyboardMarkup:
+    """Global or per-user action log list.
+
+    Callbacks:
+      adm:actlogs:{page}
+      adm:actlogs:u:{user_id}:{page}
+      adm:actlog:{id}:{page}
+      adm:actlog:{id}:u:{user_id}:{page}
+    """
+    prefix = f"adm:actlogs:u:{user_id}" if user_id is not None else "adm:actlogs"
+    rows: list[list[InlineKeyboardButton]] = []
+    for h in items:
+        lid = h.get("id")
+        when = ui.format_user_datetime(h.get("created_at"))
+        code = h.get("code") or "?"
+        label_act = (h.get("label") or h.get("action") or "?")[:28]
+        detail = (h.get("detail") or "").replace("\n", " ")
+        if detail:
+            detail = detail[:24]
+            title = f"{when} {code} {label_act} · {detail}"
+        else:
+            title = f"{when} {code} {label_act}"
+        if user_id is not None:
+            cb = f"adm:actlog:{lid}:u:{user_id}:{page}"
+        else:
+            cb = f"adm:actlog:{lid}:{page}"
+        rows.append([InlineKeyboardButton(text=title[:64], callback_data=cb)])
+    pages = max(1, (total + page_size - 1) // page_size) if total else 1
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(
+            InlineKeyboardButton(text="‹", callback_data=f"{prefix}:{page - 1}")
+        )
+    if pages > 1:
+        nav.append(
+            InlineKeyboardButton(
+                text=f"{page + 1}/{pages}", callback_data="adm:noop"
+            )
+        )
+    if page + 1 < pages:
+        nav.append(
+            InlineKeyboardButton(text="›", callback_data=f"{prefix}:{page + 1}")
+        )
+    if nav:
+        rows.append(nav)
+    rows.append(
+        [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"{prefix}:{page}")]
+    )
+    back = "adm:users" if user_id is not None else "adm:home"
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data=back)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_action_log_detail_kb(
+    log_id: int,
+    page: int,
+    *,
+    user_id: int | None = None,
+) -> InlineKeyboardMarkup:
+    if user_id is not None:
+        back = f"adm:actlogs:u:{user_id}:{page}"
+    else:
+        back = f"adm:actlogs:{page}"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=ui.BTN_BACK, callback_data=back)]
+        ]
+    )
+
+
 def current_exercises_kb(items: list[tuple], *, page: int = 0) -> InlineKeyboardMarkup:
     """items: list of (exercise_id, label)."""
     page_size = 10
@@ -1034,13 +1116,21 @@ def admin_users_kb(users: list) -> InlineKeyboardMarkup:
                     )
                 ]
             )
-            continue
-        flag = "✓" if u.is_program_admin else "✗"
+        else:
+            flag = "✓" if u.is_program_admin else "✗"
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"[{flag} прог] {u.short_code} · {u.display_name}",
+                        callback_data=f"adm:u:prog:{u.id}",
+                    )
+                ]
+            )
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"[{flag} прог] {u.short_code} · {u.display_name}",
-                    callback_data=f"adm:u:prog:{u.id}",
+                    text=f"🧾 Лог · {u.short_code}",
+                    callback_data=f"adm:actlogs:u:{u.id}:0",
                 )
             ]
         )

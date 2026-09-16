@@ -36,6 +36,7 @@ from app.services.history import (
 )
 from app.db.models import SessionSet
 from app.services.telegram_safe import safe_callback_answer, safe_edit_text
+from app.services.user_actions import log_action
 from app.services.users import can_open_admin, get_or_create_user
 from app.states import EditSessionSG
 
@@ -328,6 +329,13 @@ async def hist_delete_session_ok(callback: CallbackQuery, state: FSMContext) -> 
     if not ok:
         await callback.answer("Уже удалено", show_alert=True)
         return
+    await log_action(
+        target_id,
+        "history.delete",
+        detail=f"session#{session_id}",
+        entity_type="session",
+        entity_id=session_id,
+    )
     if viewing_other:
         title = f"Тренировки · {label}:"
     elif sessions:
@@ -527,6 +535,13 @@ async def hist_delete_set(callback: CallbackQuery, state: FSMContext) -> None:
             return
         await session.delete(row)
         await session.commit()
+    await log_action(
+        target_id,
+        "history.edit",
+        detail=f"delete set#{set_id}",
+        entity_type="set",
+        entity_id=set_id,
+    )
     await callback.answer("Удалил")
     await _show_edit_sets(callback, state, session_id)
 
@@ -575,6 +590,13 @@ async def hist_edit_weight_save(message: Message, state: FSMContext) -> None:
         row.weight = weight
         row.volume = max(int(row.reps), 1) * weight * max(int(row.sets_count), 1)
         await session.commit()
+    await log_action(
+        target_id,
+        "history.edit",
+        detail=f"set#{set_id} weight={weight:g}",
+        entity_type="set",
+        entity_id=int(set_id) if set_id is not None else None,
+    )
     await state.set_state(EditSessionSG.pick_set)
     await message.answer(f"Вес обновлён: {weight:g} кг. Открой список подходов кнопкой ниже или /history.")
     # re-show via a fake - send edit sets as new message
@@ -609,6 +631,13 @@ async def hist_edit_reps_save(message: Message, state: FSMContext) -> None:
         row.reps = reps
         row.volume = max(reps, 1) * float(row.weight) * max(int(row.sets_count), 1)
         await session.commit()
+    await log_action(
+        target_id,
+        "history.edit",
+        detail=f"set#{set_id} reps={reps}",
+        entity_type="set",
+        entity_id=int(set_id) if set_id is not None else None,
+    )
     await state.set_state(EditSessionSG.pick_set)
     async with SessionLocal() as session:
         ws = await get_user_session(session, target_id, int(session_id))

@@ -58,6 +58,7 @@ from app.services.recap import build_personal_retrospective
 from app.services.reminders import WEEKDAY_NAMES, get_template_for_weekday
 from app.services.coach_delivery import run_coach_and_reply
 from app.services.nn_client import NnStatus, get_nn_status
+from app.services.user_actions import log_action
 from app.services.strength_levels import (
     evaluate_logged_exercise,
     format_level_feedback,
@@ -495,6 +496,13 @@ async def workout_mode_today(callback: CallbackQuery, state: FSMContext) -> None
         session.add(ws)
         await session.commit()
         await session.refresh(ws)
+        await log_action(
+            user.id,
+            "workout.start",
+            detail=f"{template.name} (#{template.hashtag})",
+            entity_type="session",
+            entity_id=ws.id,
+        )
         template = await load_template_with_exercises(session, template.id)
         await _show_session_map(
             callback.message,
@@ -574,6 +582,13 @@ async def workout_pick_template(callback: CallbackQuery, state: FSMContext) -> N
         session.add(ws)
         await session.commit()
         await session.refresh(ws)
+        await log_action(
+            user.id,
+            "workout.start",
+            detail=f"свободная: {template.name}",
+            entity_type="session",
+            entity_id=ws.id,
+        )
         await _show_session_map(
             callback.message,
             state,
@@ -634,6 +649,13 @@ async def workout_arch_pick(callback: CallbackQuery, state: FSMContext) -> None:
             session.add(ws)
             await session.commit()
             await session.refresh(ws)
+            await log_action(
+                user.id,
+                "workout.start",
+                detail=f"архив: {item.name}",
+                entity_type="session",
+                entity_id=ws.id,
+            )
         free = {
             "name": item.name,
             "target_sets": item.target_sets,
@@ -840,6 +862,14 @@ async def note_save(message: Message, state: FSMContext) -> None:
             session_id=data.get("session_id"),
         )
         await session.commit()
+        uid = user.id
+    await log_action(
+        uid,
+        "workout.note",
+        detail=f"{exercise_name}: {'очищена' if cleared else (note_val or '')[:120]}",
+        entity_type="exercise",
+        entity_id=int(exercise_id) if exercise_id else None,
+    )
     logged = data.get("logged") or []
     note_line = f"\nЗаметка: {note_val}" if note_val else "\nЗаметка очищена"
     await state.set_state(WorkoutSG.difficulty)
@@ -1594,6 +1624,17 @@ async def pick_difficulty(callback: CallbackQuery, state: FSMContext) -> None:
 
         await session.commit()
 
+        await log_action(
+            user.id,
+            "workout.sets",
+            detail=(
+                f"{exercise.name}: {format_logged_parts(logged)} "
+                f"{DIFFICULTY_LABELS[difficulty]}"
+            )[:500],
+            entity_type="session",
+            entity_id=ws.id,
+        )
+
         target_reps = int(getattr(exercise, "target_reps_min", None) or 10)
         level_res = await evaluate_logged_exercise(
             session,
@@ -1892,6 +1933,13 @@ async def _finalize_finished_session(callback: CallbackQuery, state: FSMContext)
 
         allow_session_dm = wants_session_dm(user)
 
+    await log_action(
+        db_user_id,
+        "workout.finish",
+        detail=f"session #{finished_session_id}",
+        entity_type="session",
+        entity_id=finished_session_id,
+    )
     await state.clear()
     await callback.message.edit_text(text)
     await callback.message.answer(
@@ -1990,6 +2038,14 @@ async def reset_workout_ok(callback: CallbackQuery, state: FSMContext) -> None:
         deleted_sets = int(sets_del.rowcount or 0)
         deleted_notes = int(notes_del.rowcount or 0)
 
+        await log_action(
+            user.id,
+            "workout.reset",
+            detail=f"session #{session_id}: sets={deleted_sets}, notes={deleted_notes}",
+            entity_type="session",
+            entity_id=int(session_id),
+        )
+
         # Clear in-progress exercise draft in FSM, keep session
         await state.update_data(
             exercise_id=None,
@@ -2048,9 +2104,23 @@ async def cancel_workout(callback: CallbackQuery, state: FSMContext) -> None:
             if ws and ws.status == SessionStatus.active and not ws.sets:
                 await session.delete(ws)
                 await session.commit()
+                await log_action(
+                    user.id,
+                    "workout.skip",
+                    detail="отмена пустой сессии",
+                    entity_type="session",
+                    entity_id=int(session_id),
+                )
             elif ws and ws.status == SessionStatus.active:
                 ws.status = SessionStatus.skipped
                 await session.commit()
+                await log_action(
+                    user.id,
+                    "workout.skip",
+                    detail="сессия пропущена",
+                    entity_type="session",
+                    entity_id=int(session_id),
+                )
         show_admin = can_open_admin(user)
     await state.clear()
     await callback.message.edit_text(f"{ui.BTN_CANCEL} Тренировка отменена.")

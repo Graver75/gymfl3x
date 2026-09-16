@@ -24,6 +24,7 @@ from app.services.nn_dialog import (
     history_for_api,
     load_dialog_history,
 )
+from app.services.user_actions import log_action
 
 logger = logging.getLogger("gymflex.coach")
 
@@ -237,6 +238,26 @@ async def run_coach_and_reply(
         if len(body) > 4000:
             body = body[:3990] + "…"
         await waiting_message.edit_text(body)
+        if kind == "live_set":
+            await log_action(
+                user_id,
+                "coach.live",
+                detail=(
+                    focus_exercise_name
+                    or (live or {}).get("exercise_name")
+                    or None
+                ),
+                entity_type="session",
+                entity_id=focus_session_id,
+            )
+        else:
+            await log_action(
+                user_id,
+                "coach.digest",
+                detail=kind,
+                entity_type="session" if focus_session_id else None,
+                entity_id=focus_session_id,
+            )
     except Exception:
         logger.exception("Coach delivery failed")
         try:

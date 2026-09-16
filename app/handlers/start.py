@@ -11,6 +11,7 @@ from app.filters import PrivateChat
 from app.keyboards import main_menu, onboarding_sex_kb, skip_kb
 from app.middlewares.menu_reset import MAIN_MENU_TEXTS
 from app.services.progression import PHASE_LABELS
+from app.services.user_actions import log_action
 from app.services.users import apply_onboarding, can_open_admin, get_or_create_user
 from app.states import OnboardingSG
 
@@ -264,6 +265,8 @@ async def onb_experience(message: Message, state: FSMContext) -> None:
             sex=data.get("sex"),
             age=data.get("age"),
         )
+        uid = user.id
 
+    await log_action(uid, "onboarding.done", detail=user.short_code)
     await state.clear()
     await _onboarding_done_welcome(message, user)

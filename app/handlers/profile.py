@@ -16,6 +16,7 @@ from app.services.nn_client import get_nn_status
 from app.services.progression import PHASE_LABELS, phase_from_experience
 from app.services.strength_levels import profile_progress_lines
 from app.services.users import can_open_admin, effective_experience_months, get_or_create_user, reset_own_training_data, set_experience_months
+from app.services.user_actions import log_action
 from app.states import ProfileSG
 
 router = Router(name="profile")
@@ -158,10 +159,12 @@ async def set_phase(callback: CallbackQuery) -> None:
         )
         user.phase = phase
         await session.commit()
+        uid = user.id
         log_level = getattr(user, "log_level", None) or LogLevel.minimal
         sex = getattr(user, "sex", None)
         text = _profile_text(user, nn_line=await _nn_line())
 
+    await log_action(uid, "profile.phase", detail=phase.value)
     if callback.message:
         await callback.message.edit_text(
             text + "\n\nФаза, пол и детализация лога — кнопки ниже.",
@@ -189,10 +192,12 @@ async def set_log_level(callback: CallbackQuery) -> None:
         )
         user.log_level = level
         await session.commit()
+        uid = user.id
         text = _profile_text(user, nn_line=await _nn_line())
         phase = user.phase
         sex = getattr(user, "sex", None)
 
+    await log_action(uid, "profile.log_level", detail=level.value)
     if callback.message:
         await callback.message.edit_text(
             text + "\n\nФаза, пол и детализация лога — кнопки ниже.",
@@ -217,9 +222,11 @@ async def set_sex(callback: CallbackQuery) -> None:
         )
         user.sex = sex
         await session.commit()
+        uid = user.id
         log_level = getattr(user, "log_level", None) or LogLevel.minimal
         text = _profile_text(user, nn_line=await _nn_line())
         phase = user.phase
+    await log_action(uid, "profile.sex", detail=sex)
     await callback.message.edit_text(
         text + "\n\nФаза, пол и детализация лога — кнопки ниже.",
         reply_markup=profile_kb(phase, log_level, sex=sex),
@@ -316,10 +323,12 @@ async def profile_ai_toggle_session(callback: CallbackQuery) -> None:
         )
         user.ai_session_enabled = not bool(getattr(user, "ai_session_enabled", True))
         await session.commit()
+        uid = user.id
         text = _ai_settings_text(user)
         sess = bool(user.ai_session_enabled)
         week = bool(getattr(user, "ai_week_enabled", True))
         dest = getattr(user, "ai_dest", None) or "both"
+    await log_action(uid, "profile.ai", detail=f"session={'on' if sess else 'off'}")
     await callback.message.edit_text(
         text, reply_markup=profile_ai_kb(session_on=sess, week_on=week, dest=dest)
     )
@@ -338,10 +347,12 @@ async def profile_ai_toggle_week(callback: CallbackQuery) -> None:
         )
         user.ai_week_enabled = not bool(getattr(user, "ai_week_enabled", True))
         await session.commit()
+        uid = user.id
         text = _ai_settings_text(user)
         sess = bool(getattr(user, "ai_session_enabled", True))
         week = bool(user.ai_week_enabled)
         dest = getattr(user, "ai_dest", None) or "both"
+    await log_action(uid, "profile.ai", detail=f"week={'on' if week else 'off'}")
     await callback.message.edit_text(
         text, reply_markup=profile_ai_kb(session_on=sess, week_on=week, dest=dest)
     )
@@ -364,9 +375,11 @@ async def profile_ai_set_dest(callback: CallbackQuery) -> None:
         )
         user.ai_dest = dest
         await session.commit()
+        uid = user.id
         text = _ai_settings_text(user)
         sess = bool(getattr(user, "ai_session_enabled", True))
         week = bool(getattr(user, "ai_week_enabled", True))
+    await log_action(uid, "profile.ai", detail=f"dest={dest}")
     await callback.message.edit_text(
         text, reply_markup=profile_ai_kb(session_on=sess, week_on=week, dest=dest)
     )
@@ -407,11 +420,13 @@ async def profile_reset_ok(callback: CallbackQuery) -> None:
             await callback.answer("Сначала /start", show_alert=True)
             return
         stats = await reset_own_training_data(session, user.id)
+        uid = user.id
         log_level = getattr(user, "log_level", None) or LogLevel.minimal
         text = _profile_text(user, nn_line=await _nn_line())
         phase = user.phase
         sex = getattr(user, "sex", None)
         show_admin = can_open_admin(user)
+    await log_action(uid, "profile.reset")
     await callback.message.edit_text(
         "Готово, данные обнулены.\n"
         f"Сессий: {stats['sessions']}, "
@@ -457,11 +472,13 @@ async def profile_save_name(message: Message, state: FSMContext) -> None:
         )
         user.display_name = name[:64]
         await session.commit()
+        uid = user.id
         show_admin = can_open_admin(user)
         text = _profile_text(user, nn_line=await _nn_line())
         log_level = getattr(user, "log_level", None) or LogLevel.minimal
         phase = user.phase
         sex = getattr(user, "sex", None)
+    await log_action(uid, "profile.name", detail=name[:64])
     await state.clear()
     await message.answer(
         f"Имя обновлено.\n\n{text}",
@@ -508,11 +525,13 @@ async def profile_save_code(message: Message, state: FSMContext) -> None:
             return
         user.short_code = code
         await session.commit()
+        uid = user.id
         show_admin = can_open_admin(user)
         text = _profile_text(user, nn_line=await _nn_line())
         log_level = getattr(user, "log_level", None) or LogLevel.minimal
         phase = user.phase
         sex = getattr(user, "sex", None)
+    await log_action(uid, "profile.code", detail=code)
     await state.clear()
     await message.answer(
         f"Код обновлён: {code}\n\n{text}",
@@ -558,11 +577,13 @@ async def profile_save_age(message: Message, state: FSMContext) -> None:
         )
         user.age = age
         await session.commit()
+        uid = user.id
         show_admin = can_open_admin(user)
         text = _profile_text(user, nn_line=await _nn_line())
         log_level = getattr(user, "log_level", None) or LogLevel.minimal
         phase = user.phase
         sex = getattr(user, "sex", None)
+    await log_action(uid, "profile.age", detail=str(age))
     await state.clear()
     await message.answer(
         f"Возраст обновлён: {age}\n\n{text}",
@@ -603,7 +624,9 @@ async def save_weight(message: Message, state: FSMContext) -> None:
         user.body_weight = weight
         await log_body_weight(session, user.id, weight)
         await session.commit()
+        uid = user.id
         show_admin = can_open_admin(user)
+    await log_action(uid, "profile.weight", detail=f"{weight:g} кг")
     await state.clear()
     await message.answer(
         f"Вес обновлён: {weight:g} кг",
@@ -645,8 +668,10 @@ async def save_experience(message: Message, state: FSMContext) -> None:
         set_experience_months(user, months)
         user.phase = phase_from_experience(months)
         await session.commit()
+        uid = user.id
         phase = user.phase
         show_admin = can_open_admin(user)
+    await log_action(uid, "profile.experience", detail=f"{months} мес")
     await state.clear()
     await message.answer(
         f"Стаж: {months} мес, фаза: {PHASE_LABELS[phase]}",
