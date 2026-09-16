@@ -1605,10 +1605,11 @@ async def adm_hidden_menu(callback: CallbackQuery) -> None:
     await safe_edit_text(
         callback.message,
         f"{ui.BTN_ADM_HIDDEN_AI}\n\n"
-        "Скрытые job'ы не пишут в чат атлетам — только пишут план в БД "
-        "и шлют тебе превью результата.\n"
+        "Скрытые job'ы не пишут в чат атлетам — только пишут план в БД.\n"
+        "После форса полный результат (сводка + планы по упражнениям + advice) "
+        "придёт тебе в личку.\n"
         "Автозапуск: вместе с недельным дайджестом (тот же день/час).\n"
-        "Полный request/response — в «Запросы ИИ» (kind=week_plan).",
+        "Сырой request/response — в «Запросы ИИ» (kind=week_plan).",
         reply_markup=admin_hidden_kb(),
     )
     await callback.answer()
@@ -1661,20 +1662,122 @@ async def adm_hidden_go(callback: CallbackQuery) -> None:
         await callback.answer("?", show_alert=True)
         return
     only_id = user.id if scope == "me" else None
-    await callback.answer("Считаю план… это может занять минуту")
+    await callback.answer("Считаю план… смотри личку")
+    waiting = await callback.message.answer(
+        f"{ui.ICO_NN} Скрытый job «Прогноз недели» запущен "
+        f"({'только ты' if scope == 'me' else 'все атлеты'})…\n"
+        "Результат придёт сюда и в личку."
+    )
+    report: dict = {}
     try:
-        status = await force_week_plan(
+        status, report = await force_week_plan(
             callback.bot,
             admin_telegram_id=callback.from_user.id,
             only_user_id=only_id,
         )
     except Exception as exc:
         status = f"Ошибка: {exc}"[:300]
+        report = {}
+    from app.keyboards import admin_hidden_result_kb
+
+    kb = admin_hidden_result_kb(report)
+    try:
+        await waiting.edit_text(f"{ui.BTN_ADM_HIDDEN_AI}\n\n{status}", reply_markup=kb)
+    except Exception:
+        await callback.message.answer(
+            f"{ui.BTN_ADM_HIDDEN_AI}\n\n{status}", reply_markup=kb
+        )
+    try:
+        await safe_edit_text(
+            callback.message,
+            f"{ui.BTN_ADM_HIDDEN_AI}\n\n{status}",
+            reply_markup=kb,
+        )
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data == "adm:hidden:last")
+async def adm_hidden_last(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    from app.keyboards import admin_hidden_result_kb
+    from app.services.week_plan import format_batch_summary, load_last_force_preview
+
+    async with SessionLocal() as session:
+        store = await load_last_force_preview(session)
+    if not store:
+        await callback.answer("Нет сохранённого результата", show_alert=True)
+        return
+    fake_report = {
+        "week_start": store.get("week_start"),
+        "athletes": len(store.get("athletes") or []),
+        "ok_athletes": sum(1 for a in (store.get("athletes") or []) if a.get("ok")),
+        "exercises_saved": sum(int(a.get("saved") or 0) for a in (store.get("athletes") or [])),
+        "target_exercise_n": "?",
+        "results": store.get("athletes") or [],
+    }
+    text = format_batch_summary(fake_report)
     await safe_edit_text(
         callback.message,
-        f"{ui.BTN_ADM_HIDDEN_AI}\n\n{status}",
-        reply_markup=admin_hidden_kb(),
+        f"{ui.BTN_ADM_HIDDEN_AI}\n\n{text}",
+        reply_markup=admin_hidden_result_kb(fake_report),
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:hidden:raw:"))
+async def adm_hidden_raw(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    if not await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    # adm:hidden:raw:{user_id}:{chunk}
+    parts = callback.data.split(":")
+    if len(parts) < 5:
+        await callback.answer("Битые данные", show_alert=True)
+        return
+    try:
+        user_id = int(parts[3])
+        chunk = int(parts[4])
+    except ValueError:
+        await callback.answer("Битые данные", show_alert=True)
+        return
+    from app.keyboards import admin_hidden_raw_chunk_kb
+    from app.services.week_plan import (
+        PREVIEW_CHUNK,
+        load_last_force_preview,
+        preview_athlete_raw,
+    )
+
+    async with SessionLocal() as session:
+        store = await load_last_force_preview(session)
+    if not store:
+        await callback.answer("Нет сохранённого превью", show_alert=True)
+        return
+    label, raw = preview_athlete_raw(store, user_id)
+    total = max(1, (len(raw) + PREVIEW_CHUNK - 1) // PREVIEW_CHUNK)
+    chunk = max(0, min(chunk, total - 1))
+    piece = raw[chunk * PREVIEW_CHUNK : (chunk + 1) * PREVIEW_CHUNK]
+    header = f"📜 Превью · {label} · {chunk + 1}/{total}\n\n"
+    text = header + piece
+    if len(text) > 4090:
+        text = text[:4085] + "…"
+    await safe_edit_text(
+        callback.message,
+        text,
+        reply_markup=admin_hidden_raw_chunk_kb(
+            user_id,
+            chunk,
+            has_prev=chunk > 0,
+            has_next=chunk + 1 < total,
+        ),
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "adm:chats")

@@ -720,6 +720,60 @@ def admin_hidden_week_plan_kb() -> InlineKeyboardMarkup:
     )
 
 
+def admin_hidden_result_kb(report: dict | None) -> InlineKeyboardMarkup:
+    """After force: expand raw preview per athlete."""
+    rows: list[list[InlineKeyboardButton]] = []
+    results = (report or {}).get("results") or []
+    for r in results:
+        uid = r.get("user_id")
+        if uid is None:
+            continue
+        code = str(r.get("code") or uid)[:16]
+        mark = "✓" if r.get("ok") else "✗"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"📜 {mark} {code}",
+                    callback_data=f"adm:hidden:raw:{int(uid)}:0",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:hidden")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_hidden_raw_chunk_kb(
+    user_id: int,
+    chunk: int,
+    *,
+    has_prev: bool,
+    has_next: bool,
+) -> InlineKeyboardMarkup:
+    nav: list[InlineKeyboardButton] = []
+    if has_prev:
+        nav.append(
+            InlineKeyboardButton(
+                text="‹ Назад",
+                callback_data=f"adm:hidden:raw:{user_id}:{chunk - 1}",
+            )
+        )
+    if has_next:
+        nav.append(
+            InlineKeyboardButton(
+                text="Далее ›",
+                callback_data=f"adm:hidden:raw:{user_id}:{chunk + 1}",
+            )
+        )
+    rows: list[list[InlineKeyboardButton]] = []
+    if nav:
+        rows.append(nav)
+    rows.append(
+        [InlineKeyboardButton(text="⬅️ К результату", callback_data="adm:hidden:last")]
+    )
+    rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:hidden")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def admin_nn_prompts_kb(items: list[tuple[str, str]]) -> InlineKeyboardMarkup:
     """items: (key, title)."""
     rows = [

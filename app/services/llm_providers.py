@@ -194,6 +194,7 @@ async def generate_with_provider(
     system: str,
     user_text: str,
     history: list[dict[str, str]] | None = None,
+    max_tokens: int | None = None,
 ) -> tuple[str, GeminiResult]:
     """Returns (provider_id_used, result). Never raises."""
     settings = get_settings()
@@ -202,9 +203,16 @@ async def generate_with_provider(
     if spec is None or not provider_configured(spec):
         return pid, GeminiResult(status="error", error=f"provider {pid} not configured")
 
+    tokens = int(max_tokens) if max_tokens else 1024
+    timeout = settings.nn_timeout_sec
+    if tokens > 2000:
+        timeout = max(timeout, 120.0)
     if spec.kind == "gemini":
         result = await generate_content(
-            system=system, user_text=user_text, history=history
+            system=system,
+            user_text=user_text,
+            history=history,
+            max_output_tokens=tokens,
         )
         return pid, result
 
@@ -215,7 +223,8 @@ async def generate_with_provider(
         system=system,
         user_text=user_text,
         history=history,
-        timeout=settings.nn_timeout_sec,
+        timeout=timeout,
+        max_tokens=tokens,
     )
     return pid, result
 

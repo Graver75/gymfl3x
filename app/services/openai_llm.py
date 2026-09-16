@@ -75,6 +75,7 @@ async def chat_completions(
     user_text: str,
     history: list[dict[str, str]] | None = None,
     timeout: float = 60.0,
+    max_tokens: int = 1024,
 ) -> GeminiResult:
     """Never raises."""
     key = (api_key or "").strip()
@@ -97,7 +98,7 @@ async def chat_completions(
         "model": model,
         "messages": messages,
         "temperature": 0.4,
-        "max_tokens": 1024,
+        "max_tokens": max(256, int(max_tokens)),
     }
     started = time.monotonic()
     try:

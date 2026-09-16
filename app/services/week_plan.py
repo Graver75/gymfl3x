@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db.models import (
+    AppSetting,
     TemplateExercise,
     User,
     UserExerciseState,
@@ -106,8 +107,36 @@ def extract_json_object(text: str) -> dict[str, Any] | None:
             if isinstance(data, dict):
                 return data
         except json.JSONDecodeError:
-            return None
+            pass
+    salvaged = _salvage_exercises(cleaned)
+    if salvaged:
+        return {"exercises": salvaged}
     return None
+
+
+def _salvage_exercises(raw: str) -> list[dict[str, Any]]:
+    """Pull fully-formed exercise objects out of a truncated week_plan JSON."""
+    out: list[dict[str, Any]] = []
+    for m in re.finditer(
+        r'\{\s*"exercise_id"\s*:\s*\d+\s*,[\s\S]*?\}\s*(?=,|\]|$)',
+        raw,
+    ):
+        chunk = m.group(0).rstrip().rstrip(",")
+        if chunk.count("{") != chunk.count("}"):
+            continue
+        try:
+            obj = json.loads(chunk)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and "exercise_id" in obj:
+            out.append(obj)
+    return out
+
+
+EXERCISE_CHUNK = 5
+WEEK_PLAN_MAX_TOKENS = 4096
+SETTING_LAST_PREVIEW = "hidden_week_plan_last_preview"
+PREVIEW_CHUNK = 3500
 
 
 async def exercises_for_week(
@@ -269,7 +298,7 @@ async def run_week_plan_for_user(
     week_start: date,
     exercises: list[TemplateExercise] | None = None,
 ) -> dict[str, Any]:
-    """Call LLM for one athlete and upsert plans. Returns summary dict."""
+    """Call LLM for one athlete (chunked) and upsert plans. Returns summary dict."""
     exs = exercises if exercises is not None else await exercises_for_week(session, week_start)
     if not exs:
         return {
@@ -281,104 +310,116 @@ async def run_week_plan_for_user(
         }
 
     ctx = await build_coach_context(session, user.id, kind="week")
-    payload = {
-        **ctx,
-        "kind": "week_plan",
-        "week_start": week_start.isoformat(),
-        "target_exercises": _target_exercises_payload(exs),
-    }
-    raw = await request_coach(
-        kind="week_plan",
-        athlete=payload,
-        focus={"week_start": week_start.isoformat()},
-        history=[],
-        user_id=user.id,
-        user_label=user.short_code,
-    )
-    if not raw:
-        return {
-            "user_id": user.id,
-            "code": user.short_code,
-            "ok": False,
-            "error": "llm_empty",
-            "saved": 0,
-        }
-
-    parsed = extract_json_object(raw)
-    if not parsed:
-        return {
-            "user_id": user.id,
-            "code": user.short_code,
-            "ok": False,
-            "error": "json_parse",
-            "saved": 0,
-            "raw_preview": raw[:400],
-        }
-
     allowed = {ex.id for ex in exs}
-    items = parsed.get("exercises")
-    if not isinstance(items, list):
+    saved_total = 0
+    raw_parts: list[str] = []
+    errors: list[str] = []
+    n_chunks = (len(exs) + EXERCISE_CHUNK - 1) // EXERCISE_CHUNK
+
+    for i in range(0, len(exs), EXERCISE_CHUNK):
+        chunk = exs[i : i + EXERCISE_CHUNK]
+        chunk_i = i // EXERCISE_CHUNK + 1
+        payload = {
+            **ctx,
+            "kind": "week_plan",
+            "week_start": week_start.isoformat(),
+            "target_exercises": _target_exercises_payload(chunk),
+            "chunk": f"{chunk_i}/{n_chunks}",
+        }
+        raw = await request_coach(
+            kind="week_plan",
+            athlete=payload,
+            focus={"week_start": week_start.isoformat()},
+            history=[],
+            user_id=user.id,
+            user_label=user.short_code,
+            max_tokens=WEEK_PLAN_MAX_TOKENS,
+        )
+        if not raw:
+            errors.append(f"chunk{chunk_i}:llm_empty")
+            continue
+        raw_parts.append(raw)
+        parsed = extract_json_object(raw)
+        if not parsed:
+            errors.append(f"chunk{chunk_i}:json_parse")
+            continue
+        items = parsed.get("exercises")
+        if not isinstance(items, list):
+            errors.append(f"chunk{chunk_i}:bad_schema")
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                ex_id = int(item.get("exercise_id"))
+            except (TypeError, ValueError):
+                continue
+            if ex_id not in allowed:
+                continue
+            sets_raw = item.get("sets") or []
+            sets: list[dict[str, Any]] = []
+            if isinstance(sets_raw, list):
+                for s in sets_raw:
+                    if not isinstance(s, dict):
+                        continue
+                    try:
+                        n = int(s.get("n") or s.get("set") or 0)
+                        kg = float(s.get("kg") or s.get("weight") or 0)
+                        reps = int(s.get("reps") or 0)
+                        rpe = int(s.get("rpe") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if n < 1 or kg <= 0 or reps <= 0:
+                        continue
+                    row: dict[str, Any] = {"n": n, "kg": kg, "reps": reps}
+                    if 1 <= rpe <= 10:
+                        row["rpe"] = rpe
+                    sets.append(row)
+            sets = sorted(sets, key=lambda x: x["n"])
+            if not sets:
+                continue
+            advice = item.get("advice")
+            advice_s = str(advice).strip()[:1200] if advice else None
+            await _upsert_plan(
+                session,
+                user_id=user.id,
+                exercise_id=ex_id,
+                week_start=week_start,
+                advice=advice_s,
+                sets=sets,
+                usage_log_id=None,
+            )
+            saved_total += 1
+
+    if saved_total:
+        await session.commit()
+
+    full_raw = "\n\n---\n\n".join(raw_parts)
+    if saved_total > 0:
         return {
             "user_id": user.id,
             "code": user.short_code,
-            "ok": False,
-            "error": "bad_schema",
-            "saved": 0,
-            "raw_preview": raw[:400],
+            "ok": True,
+            "saved": saved_total,
+            "raw_preview": full_raw,
+            "warnings": errors or None,
         }
-
-    saved = 0
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        try:
-            ex_id = int(item.get("exercise_id"))
-        except (TypeError, ValueError):
-            continue
-        if ex_id not in allowed:
-            continue
-        sets_raw = item.get("sets") or []
-        sets: list[dict[str, Any]] = []
-        if isinstance(sets_raw, list):
-            for s in sets_raw:
-                if not isinstance(s, dict):
-                    continue
-                try:
-                    n = int(s.get("n") or s.get("set") or 0)
-                    kg = float(s.get("kg") or s.get("weight") or 0)
-                    reps = int(s.get("reps") or 0)
-                    rpe = int(s.get("rpe") or 0)
-                except (TypeError, ValueError):
-                    continue
-                if n < 1 or kg <= 0 or reps <= 0:
-                    continue
-                row: dict[str, Any] = {"n": n, "kg": kg, "reps": reps}
-                if 1 <= rpe <= 10:
-                    row["rpe"] = rpe
-                sets.append(row)
-        sets = sorted(sets, key=lambda x: x["n"])
-        if not sets:
-            continue
-        advice = item.get("advice")
-        advice_s = str(advice).strip()[:1200] if advice else None
-        await _upsert_plan(
-            session,
-            user_id=user.id,
-            exercise_id=ex_id,
-            week_start=week_start,
-            advice=advice_s,
-            sets=sets,
-            usage_log_id=None,
-        )
-        saved += 1
-
-    await session.commit()
+    err = "llm_empty"
+    if errors:
+        if all(e.endswith("llm_empty") for e in errors):
+            err = "llm_empty"
+        elif any(e.endswith("json_parse") for e in errors):
+            err = "json_parse"
+        else:
+            err = errors[0]
     return {
         "user_id": user.id,
         "code": user.short_code,
-        "ok": saved > 0,
-        "saved": saved,
-        "raw_preview": raw[:600],
+        "ok": False,
+        "error": err,
+        "saved": 0,
+        "raw_preview": full_raw or None,
+        "warnings": errors or None,
     }
 
 
@@ -447,7 +488,7 @@ async def run_week_plan_batch(
         }
 
 
-def format_batch_summary(report: dict[str, Any], *, max_preview: int = 1200) -> str:
+def format_batch_summary(report: dict[str, Any], *, max_preview: int = 800) -> str:
     if report.get("error") == "nn_offline":
         return "ИИ офлайн — week_plan не запущен"
     if report.get("error") == "no_exercises":
@@ -458,25 +499,156 @@ def format_batch_summary(report: dict[str, Any], *, max_preview: int = 1200) -> 
         f"Атлетов: {report.get('ok_athletes', 0)}/{report.get('athletes', 0)} ок",
         f"Упражнений записано: {report.get('exercises_saved', 0)} "
         f"(целевых в шаблонах: {report.get('target_exercise_n', 0)})",
+        "",
+        "Полный raw — кнопками «📜 Превью» ниже (не обрезается).",
     ]
     for r in report.get("results") or []:
         code = r.get("code") or r.get("user_id")
         if r.get("ok"):
-            lines.append(f"· {code}: +{r.get('saved')} упр.")
+            warn = r.get("warnings")
+            extra = f" (warn: {', '.join(warn)})" if warn else ""
+            lines.append(f"· {code}: +{r.get('saved')} упр.{extra}")
         else:
             lines.append(f"· {code}: FAIL ({r.get('error')})")
-        preview = r.get("raw_preview")
-        if preview and not r.get("ok"):
-            lines.append(f"  preview: {preview[:200]}")
+            if r.get("raw_preview"):
+                lines.append("  → есть raw, раскрой превью")
     text = "\n".join(lines)
-    # Attach one successful raw preview for admin inspection
-    for r in report.get("results") or []:
-        if r.get("ok") and r.get("raw_preview"):
-            text += "\n\n--- JSON preview ---\n" + str(r["raw_preview"])[:max_preview]
-            break
-    if len(text) > 3900:
-        text = text[:3890] + "…"
+    if len(text) > 3500:
+        text = text[:3490] + "…"
     return text
+
+
+async def save_last_force_preview(session: AsyncSession, report: dict[str, Any]) -> None:
+    """Persist per-athlete raw for expand buttons in admin."""
+    payload = {
+        "week_start": report.get("week_start"),
+        "athletes": [
+            {
+                "user_id": r.get("user_id"),
+                "code": r.get("code"),
+                "ok": bool(r.get("ok")),
+                "error": r.get("error"),
+                "saved": r.get("saved"),
+                "raw": r.get("raw_preview") or "",
+            }
+            for r in (report.get("results") or [])
+            if r.get("user_id") is not None
+        ],
+    }
+    value = json.dumps(payload, ensure_ascii=False)
+    # Cap stored blob to ~200k chars
+    if len(value) > 200_000:
+        for a in payload["athletes"]:
+            a["raw"] = (a.get("raw") or "")[:20_000]
+        value = json.dumps(payload, ensure_ascii=False)
+    row = await session.get(AppSetting, SETTING_LAST_PREVIEW)
+    if row is None:
+        session.add(AppSetting(key=SETTING_LAST_PREVIEW, value=value))
+    else:
+        row.value = value
+    await session.commit()
+
+
+async def load_last_force_preview(session: AsyncSession) -> dict[str, Any] | None:
+    row = await session.get(AppSetting, SETTING_LAST_PREVIEW)
+    if not row or not (row.value or "").strip():
+        return None
+    try:
+        data = json.loads(row.value)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def preview_athlete_raw(store: dict[str, Any], user_id: int) -> tuple[str, str]:
+    """Returns (label, raw_text)."""
+    for a in store.get("athletes") or []:
+        if int(a.get("user_id") or 0) == int(user_id):
+            code = a.get("code") or str(user_id)
+            status = "OK" if a.get("ok") else f"FAIL ({a.get('error')})"
+            raw = a.get("raw") or "—"
+            return f"{code} · {status}", str(raw)
+    return str(user_id), "Нет сохранённого превью"
+
+def _chunk_text(text: str, limit: int = 3500) -> list[str]:
+    text = (text or "").strip()
+    if not text:
+        return []
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    buf: list[str] = []
+    size = 0
+    for line in text.split("\n"):
+        add = len(line) + (1 if buf else 0)
+        if buf and size + add > limit:
+            chunks.append("\n".join(buf))
+            buf = [line]
+            size = len(line)
+        else:
+            buf.append(line)
+            size += add
+    if buf:
+        chunks.append("\n".join(buf))
+    return chunks
+
+
+async def format_saved_plans_detail(
+    session: AsyncSession,
+    *,
+    week_start: date,
+    user_ids: list[int] | None = None,
+) -> str:
+    """Human-readable plans from DB after a run."""
+    q = (
+        select(UserExerciseWeekPlan, User, TemplateExercise)
+        .join(User, User.id == UserExerciseWeekPlan.user_id)
+        .join(TemplateExercise, TemplateExercise.id == UserExerciseWeekPlan.exercise_id)
+        .where(UserExerciseWeekPlan.week_start == week_start)
+        .order_by(User.short_code, TemplateExercise.position, TemplateExercise.id)
+    )
+    if user_ids:
+        q = q.where(UserExerciseWeekPlan.user_id.in_(user_ids))
+    rows = list((await session.execute(q)).all())
+    if not rows:
+        return f"В БД нет планов на неделю с {week_start.isoformat()}."
+
+    lines = [f"Результат планов · неделя с {week_start.isoformat()}", ""]
+    current_code: str | None = None
+    for plan, user, ex in rows:
+        code = user.short_code or str(user.id)
+        if code != current_code:
+            if current_code is not None:
+                lines.append("")
+            lines.append(f"══ {code} ({user.display_name or '—'}) ══")
+            current_code = code
+        machine = f" [{ex.machine_name}]" if ex.machine_name else ""
+        lines.append(f"• {ex.name}{machine}")
+        for s in parse_sets_json(plan.sets_json):
+            rpe = s.get("rpe")
+            rpe_s = f" @RPE{rpe}" if rpe else ""
+            lines.append(f"  {s['n']}: {s['kg']:g}×{s['reps']}{rpe_s}")
+        advice = (plan.advice or "").strip()
+        if advice:
+            lines.append(f"  Совет: {advice}")
+    return "\n".join(lines)
+
+
+async def send_admin_result_messages(
+    bot: Bot,
+    admin_telegram_id: int,
+    *parts: str,
+) -> int:
+    """Send one or more plain-text result messages. Returns count sent."""
+    sent = 0
+    for part in parts:
+        for chunk in _chunk_text(part):
+            try:
+                await bot.send_message(admin_telegram_id, chunk)
+                sent += 1
+            except Exception:
+                logger.exception("failed to DM week_plan chunk")
+    return sent
 
 
 async def maybe_run_scheduled_week_plan(bot: Bot | None = None) -> None:
@@ -508,7 +680,6 @@ async def maybe_run_scheduled_week_plan(bot: Bot | None = None) -> None:
         report.get("exercises_saved"),
     )
     if bot is not None and report.get("results"):
-        # Optional: nothing to chat; admin sees via force / logs
         _ = bot
 
 
@@ -517,11 +688,60 @@ async def force_week_plan(
     *,
     admin_telegram_id: int,
     only_user_id: int | None = None,
-) -> str:
+) -> tuple[str, dict[str, Any]]:
+    """Run job and DM admin a summary + full readable plans from DB.
+
+    Returns (panel_text, report) — report used for expand-preview buttons.
+    """
     report = await run_week_plan_batch(only_user_id=only_user_id)
-    text = format_batch_summary(report)
+    summary = format_batch_summary(report)
+
+    week_raw = report.get("week_start")
     try:
-        await bot.send_message(admin_telegram_id, text)
-    except Exception:
-        logger.exception("failed to DM week_plan preview")
-    return text
+        week_start = date.fromisoformat(str(week_raw)) if week_raw else target_week_start()
+    except ValueError:
+        week_start = target_week_start()
+
+    user_ids: list[int] | None = None
+    if only_user_id is not None:
+        user_ids = [only_user_id]
+    else:
+        user_ids = [
+            int(r["user_id"])
+            for r in (report.get("results") or [])
+            if r.get("user_id") is not None
+        ] or None
+
+    async with SessionLocal() as session:
+        await save_last_force_preview(session, report)
+        detail = await format_saved_plans_detail(
+            session, week_start=week_start, user_ids=user_ids
+        )
+
+    raw_bits: list[str] = []
+    for r in report.get("results") or []:
+        preview = r.get("raw_preview")
+        if not preview:
+            continue
+        code = r.get("code") or r.get("user_id")
+        tag = "OK" if r.get("ok") else "FAIL"
+        raw_bits.append(f"--- {code} [{tag}] raw ---\n{preview}")
+    raw_block = "\n\n".join(raw_bits[:5])
+
+    header = "🤫 Результат скрытого job: Прогноз недели"
+    n = await send_admin_result_messages(
+        bot,
+        admin_telegram_id,
+        f"{header}\n\n{summary}",
+        detail,
+        raw_block,
+    )
+    panel = (
+        f"{summary}\n\n"
+        f"Полный результат отправлен в личку ({n} сообщ.).\n"
+        "Кнопки «📜 Превью» — раскрыть raw без обрезки.\n"
+        "Сырой request/response — также в «Запросы ИИ» (kind=week_plan)."
+    )
+    if len(panel) > 3500:
+        panel = panel[:3490] + "…"
+    return panel, report

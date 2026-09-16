@@ -85,6 +85,7 @@ async def generate_content(
     system: str,
     user_text: str,
     history: list[dict[str, str]] | None = None,
+    max_output_tokens: int = 1024,
 ) -> GeminiResult:
     """Call Gemini generateContent. Never raises."""
     settings = get_settings()
@@ -111,7 +112,7 @@ async def generate_content(
         "systemInstruction": {"parts": [{"text": system}]},
         "generationConfig": {
             "temperature": 0.4,
-            "maxOutputTokens": 1024,
+            "maxOutputTokens": max(256, int(max_output_tokens)),
         },
     }
 

@@ -213,6 +213,7 @@ async def request_coach(
     user_id: int | None = None,
     user_label: str | None = None,
     locale: str = "ru",
+    max_tokens: int | None = None,
 ) -> str | None:
     """Generate coach text via active LLM provider. Never raises."""
     settings = get_settings()
@@ -273,12 +274,18 @@ async def request_coach(
                 trimmed.append({"role": role, "content": content})
         hist = trimmed
 
+    # week_plan JSON for many exercises needs a larger completion budget
+    tokens = max_tokens
+    if tokens is None and kind == "week_plan":
+        tokens = 4096
+
     system = await resolve_system_prompt()
     used_pid, result = await generate_with_provider(
         provider_id=pid,
         system=system,
         user_text=user_text,
         history=hist,
+        max_tokens=tokens,
     )
 
     # Log exactly what went to the model (no synthetic re-duplication)
