@@ -11,13 +11,34 @@ from app.db.models import SessionStatus, WorkoutSession, WorkoutTemplate
 from app.services.progression import DIFFICULTY_LABELS, format_session_exercise
 from app import ui_copy as ui
 
+# Places 1–3 by total session volume (kg·reps)
+_PODIUM = ("🥇", "🥈", "🥉")
+
+
+def _session_volume(ws: WorkoutSession) -> float:
+    return float(sum(float(s.volume or 0) for s in ws.sets))
+
+
+def _rank_sessions(sessions: list[WorkoutSession]) -> list[tuple[str, WorkoutSession, float]]:
+    """Return (medal_or_empty, session, volume) sorted by volume desc, then code."""
+    scored = [(ws, _session_volume(ws)) for ws in sessions]
+    scored.sort(key=lambda x: (-x[1], x[0].user.short_code))
+    out: list[tuple[str, WorkoutSession, float]] = []
+    for i, (ws, vol) in enumerate(scored):
+        medal = _PODIUM[i] if i < len(_PODIUM) else ""
+        out.append((medal, ws, vol))
+    return out
+
 
 async def build_group_recap(session: AsyncSession, template: WorkoutTemplate, day: date) -> str:
-    """Build chat recap.
+    """Build chat recap ranked by workout volume (podium 1–2–3).
 
-    #деньспины
+    📝 #hashtag
+    Подиум по объёму:
+    🥇 И — 760
+    …
     Упражнение
-    И 12×55, 10×50+8×40 легко
+    🥇 И 12×20 hard
     """
     result = await session.execute(
         select(WorkoutSession)
@@ -35,10 +56,17 @@ async def build_group_recap(session: AsyncSession, template: WorkoutTemplate, da
     if not sessions:
         return f"{ui.ICO_RECAP} #{template.hashtag}\nПока никто не залогировал тренировку."
 
-    by_exercise: dict[str, list[str]] = defaultdict(list)
+    ranked = _rank_sessions(sessions)
+    # code -> medal for line prefixes
+    medal_by_code = {
+        ws.user.short_code: medal for medal, ws, _ in ranked if medal
+    }
+    rank_order = [ws.user.short_code for _, ws, _ in ranked]
+
+    by_exercise: dict[str, dict[str, str]] = defaultdict(dict)
     order: list[str] = []
 
-    for ws in sorted(sessions, key=lambda s: s.user.short_code):
+    for _medal, ws, _vol in ranked:
         code = ws.user.short_code
         grouped: dict[str, list] = defaultdict(list)
         for sset in ws.sets:
@@ -47,12 +75,26 @@ async def build_group_recap(session: AsyncSession, template: WorkoutTemplate, da
             if name not in by_exercise:
                 order.append(name)
             diff = DIFFICULTY_LABELS[rows[-1].difficulty]
-            by_exercise[name].append(f"{code} {format_session_exercise(rows)} {diff}")
+            prefix = medal_by_code.get(code, "")
+            mark = f"{prefix} " if prefix else ""
+            by_exercise[name][code] = (
+                f"{mark}{code} {format_session_exercise(rows)} {diff}"
+            )
 
-    lines = [f"{ui.ICO_RECAP} #{template.hashtag}"]
+    lines = [f"{ui.ICO_RECAP} #{template.hashtag}", "Подиум по объёму:"]
+    for medal, ws, vol in ranked:
+        code = ws.user.short_code
+        if medal:
+            lines.append(f"{medal} {code} — {vol:g}")
+        else:
+            lines.append(f"• {code} — {vol:g}")
+    lines.append("")
+
     for name in order:
         lines.append(name)
-        lines.extend(by_exercise[name])
+        for code in rank_order:
+            if code in by_exercise[name]:
+                lines.append(by_exercise[name][code])
         lines.append("")
     return "\n".join(lines).rstrip()
 
