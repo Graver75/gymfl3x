@@ -367,6 +367,7 @@ async def run_week_plan_for_user(
         if not isinstance(items, list):
             errors.append(f"chunk{chunk_i}:bad_schema")
             continue
+        chunk_saved = 0
         for item in items:
             if not isinstance(item, dict):
                 continue
@@ -409,10 +410,11 @@ async def run_week_plan_for_user(
                 sets=sets,
                 usage_log_id=None,
             )
+            chunk_saved += 1
             saved_total += 1
-
-    if saved_total:
-        await session.commit()
+        # Release write locks between LLM chunks (SQLite + concurrent live_set)
+        if chunk_saved:
+            await session.commit()
 
     full_raw = "\n\n---\n\n".join(raw_parts)
     if saved_total > 0:
@@ -473,39 +475,44 @@ async def run_week_plan_batch(
             if only_user_id is not None:
                 q = q.where(User.id == only_user_id)
             users = list((await session.execute(q)).scalars().all())
+        user_ids = [u.id for u in users]
+        target_n = len(exercises)
 
-        results: list[dict[str, Any]] = []
-        for user in users:
+    results: list[dict[str, Any]] = []
+    for uid in user_ids:
+        async with SessionLocal() as session:
+            user = await session.get(User, uid)
+            if not user:
+                continue
             try:
-                # Re-fetch exercises in same session after possible commits
                 exs = await exercises_for_week(session, ws)
                 res = await run_week_plan_for_user(
                     session, user, week_start=ws, exercises=exs
                 )
                 results.append(res)
             except Exception as exc:
-                logger.exception("week_plan failed user=%s", user.id)
+                logger.exception("week_plan failed user=%s", uid)
                 results.append(
                     {
-                        "user_id": user.id,
-                        "code": user.short_code,
+                        "user_id": uid,
+                        "code": user.short_code if user else None,
                         "ok": False,
                         "error": str(exc)[:200],
                         "saved": 0,
                     }
                 )
 
-        ok_n = sum(1 for r in results if r.get("ok"))
-        saved_n = sum(int(r.get("saved") or 0) for r in results)
-        return {
-            "ok": ok_n > 0,
-            "week_start": ws.isoformat(),
-            "athletes": len(results),
-            "ok_athletes": ok_n,
-            "exercises_saved": saved_n,
-            "target_exercise_n": len(exercises),
-            "results": results,
-        }
+    ok_n = sum(1 for r in results if r.get("ok"))
+    saved_n = sum(int(r.get("saved") or 0) for r in results)
+    return {
+        "ok": ok_n > 0,
+        "week_start": ws.isoformat(),
+        "athletes": len(results),
+        "ok_athletes": ok_n,
+        "exercises_saved": saved_n,
+        "target_exercise_n": target_n,
+        "results": results,
+    }
 
 
 def format_batch_summary(report: dict[str, Any], *, max_preview: int = 800) -> str:

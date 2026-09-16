@@ -151,14 +151,17 @@ async def run_coach_and_reply(
                 f"sessions={len((athlete.get('sessions') or []))} "
                 f"window={athlete.get('window_days')}"
             )
-        async with SessionLocal() as session:
-            await append_dialog_turn(
-                session, user_id, role="user", content=user_summary, kind=kind
-            )
-            await append_dialog_turn(
-                session, user_id, role="assistant", content=raw, kind=kind
-            )
-            await session.commit()
+        try:
+            async with SessionLocal() as session:
+                await append_dialog_turn(
+                    session, user_id, role="user", content=user_summary, kind=kind
+                )
+                await append_dialog_turn(
+                    session, user_id, role="assistant", content=raw, kind=kind
+                )
+                await session.commit()
+        except Exception:
+            logger.exception("Dialog history save failed (reply still sent)")
 
         safe = html.escape(raw)
         if kind == "live_set":
