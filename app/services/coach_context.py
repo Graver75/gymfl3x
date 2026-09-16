@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,24 +11,28 @@ from app.services.athlete_features import build_athlete_snapshot
 
 WINDOW_DAYS = {
     "session": 14,
-    "week": 21,
-    "week_plan": 21,
+    "week": 365,
+    "week_plan": 365,
     "month": 45,
     "exercise": 45,
     "live_set": 45,
     "session_group": 14,
-    "week_group": 21,
+    "week_group": 365,
 }
 MAX_SESSIONS = {
     "session": 8,
-    "week": 12,
-    "week_plan": 12,
+    "week": 80,
+    "week_plan": 80,
     "month": 18,
     "exercise": 14,
     "live_set": 14,
     "session_group": 8,
-    "week_group": 12,
+    "week_group": 80,
 }
+# Weekly kinds: last N sessions keep full by_ex; older ones are ultra-compact
+WEEKLY_RECENT_SESSIONS = 16
+WEEKLY_BW_POINTS = 52
+WEEKLY_KINDS = frozenset({"week", "week_group", "week_plan"})
 NOTE_MAX = 120
 
 
@@ -70,56 +75,125 @@ def _session_volume(ws: dict[str, Any]) -> float:
     return round(total, 1)
 
 
-def _compact_session(ws: dict[str, Any], *, full_sets: bool) -> dict[str, Any]:
+def _working_sets_n(sets: list[dict[str, Any]]) -> int:
+    """Unique working sets (exercise + set_number), ignoring drop variants."""
+    keys: set[tuple[Any, Any]] = set()
+    for s in sets:
+        keys.add((s.get("exercise_name"), s.get("set_number")))
+    return len(keys)
+
+
+def _ex_volume(vals: dict[str, Any]) -> float:
+    total = 0.0
+    for reps, kg in zip(vals.get("reps") or [], vals.get("kg") or []):
+        try:
+            total += float(reps or 0) * float(kg or 0)
+        except (TypeError, ValueError):
+            pass
+    return total
+
+
+def _sample_bw(series: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    if len(series) <= limit:
+        return series
+    if limit <= 2:
+        return series[:1] + series[-1:]
+    # Evenly sample including first and last
+    n = len(series)
+    idxs = {0, n - 1}
+    for i in range(1, limit - 1):
+        idxs.add(round(i * (n - 1) / (limit - 1)))
+    return [series[i] for i in sorted(idxs)]
+
+
+def _compact_session(
+    ws: dict[str, Any],
+    *,
+    full_sets: bool,
+    detail: str = "full",
+) -> dict[str, Any]:
+    """detail: full (by_ex all kg/reps) | older (ultra-compact for year history)."""
     sets = ws.get("sets") or []
+    parts_n = len(sets)
+    sets_n = _working_sets_n(sets)
     out: dict[str, Any] = {
         "id": ws.get("id"),
         "date": ws.get("date"),
         "tpl": ws.get("template_name"),
         "tpl_id": ws.get("template_id"),
-        "dur": ws.get("duration_sec"),
-        "checkin": ws.get("checkin"),
         "vol": _session_volume(ws),
-        "sets_n": len(sets),
+        "sets_n": sets_n,
+        "parts_n": parts_n,
     }
-    if full_sets:
-        out["sets"] = [_compact_set(s) for s in sets]
-    else:
-        # Aggregate by exercise for week/month
+    if detail == "older":
+        # Ultra-compact: optional top-2 exercises by volume, no full rows
         by_ex: dict[str, dict[str, Any]] = {}
         for s in sets:
             name = s.get("exercise_name") or "?"
-            slot = by_ex.setdefault(
-                name,
-                {
-                    "reps": [],
-                    "kg": [],
-                    "diff": None,
-                    "rpe": [],
-                    "m": s.get("machine_name"),
-                },
-            )
+            slot = by_ex.setdefault(name, {"reps": [], "kg": []})
             if s.get("reps") is not None:
                 slot["reps"].append(s["reps"])
             if s.get("weight") is not None:
                 slot["kg"].append(s["weight"])
-            if s.get("difficulty"):
-                slot["diff"] = s["difficulty"]
-            if s.get("rpe_1_10") is not None:
-                slot["rpe"].append(s["rpe_1_10"])
-            if s.get("machine_name") and not slot.get("m"):
-                slot["m"] = s["machine_name"]
-        out["by_ex"] = [
+        ranked = sorted(by_ex.items(), key=lambda kv: -_ex_volume(kv[1]))[:2]
+        if ranked:
+            out["top"] = [
+                {
+                    "ex": name,
+                    "vol": round(_ex_volume(vals), 1),
+                    "parts": len(vals.get("reps") or []),
+                }
+                for name, vals in ranked
+            ]
+        return out
+
+    out["dur"] = ws.get("duration_sec")
+    out["checkin"] = ws.get("checkin")
+    if full_sets:
+        out["sets"] = [_compact_set(s) for s in sets]
+        return out
+
+    by_ex: dict[str, dict[str, Any]] = {}
+    for s in sets:
+        name = s.get("exercise_name") or "?"
+        slot = by_ex.setdefault(
+            name,
             {
-                "ex": name,
-                **({"m": vals["m"]} if vals.get("m") else {}),
-                "reps": vals["reps"][-4:],
-                "kg": vals["kg"][-4:],
-                "diff": vals["diff"],
-                "rpe_avg": round(sum(vals["rpe"]) / len(vals["rpe"]), 1) if vals["rpe"] else None,
-            }
-            for name, vals in by_ex.items()
-        ]
+                "reps": [],
+                "kg": [],
+                "diff": None,
+                "rpe": [],
+                "m": s.get("machine_name"),
+                "set_keys": set(),
+            },
+        )
+        if s.get("reps") is not None:
+            slot["reps"].append(s["reps"])
+        if s.get("weight") is not None:
+            slot["kg"].append(s["weight"])
+        if s.get("difficulty"):
+            slot["diff"] = s["difficulty"]
+        if s.get("rpe_1_10") is not None:
+            slot["rpe"].append(s["rpe_1_10"])
+        if s.get("machine_name") and not slot.get("m"):
+            slot["m"] = s["machine_name"]
+        slot["set_keys"].add(s.get("set_number"))
+    out["by_ex"] = []
+    for name, vals in by_ex.items():
+        row: dict[str, Any] = {
+            "ex": name,
+            "sets": len(vals["set_keys"]),
+            "parts": len(vals["reps"]),
+            "reps": vals["reps"],
+            "kg": vals["kg"],
+            "diff": vals["diff"],
+            "rpe_avg": (
+                round(sum(vals["rpe"]) / len(vals["rpe"]), 1) if vals["rpe"] else None
+            ),
+        }
+        if vals.get("m"):
+            row["m"] = vals["m"]
+        out["by_ex"].append(row)
     return out
 
 
@@ -132,6 +206,26 @@ def _avg_rpe(sessions: list[dict[str, Any]]) -> float | None:
     if not values:
         return None
     return round(sum(values) / len(values), 2)
+
+
+async def _week_schedule(session: AsyncSession) -> list[dict[str, Any]]:
+    from app.services.reminders import get_template_for_weekday
+
+    today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    rows: list[dict[str, Any]] = []
+    for offset in range(7):
+        day = monday + timedelta(days=offset)
+        tpl = await get_template_for_weekday(session, day.weekday())
+        rows.append(
+            {
+                "wd": day.weekday(),
+                "date": day.isoformat(),
+                "tpl": tpl.name if tpl else None,
+                "tpl_id": tpl.id if tpl else None,
+            }
+        )
+    return rows
 
 
 async def build_coach_context(
@@ -162,14 +256,14 @@ async def build_coach_context(
     if kind == "session" and focus_session is not None:
         tpl_id = focus_session.get("template_id")
         same = [ws for ws in sessions if ws.get("template_id") == tpl_id]
-        # Keep focus + up to 2 previous same-template + recent others trimmed
         prev = [ws for ws in same if ws.get("id") != focus_session_id][-2:]
         picked = prev + [focus_session]
-        # Also keep a few other recent for context
         other_ids = {ws.get("id") for ws in picked}
         extras = [ws for ws in sessions if ws.get("id") not in other_ids][-3:]
         sessions_out = [
-            _compact_session(ws, full_sets=(ws.get("id") == focus_session_id or ws in prev))
+            _compact_session(
+                ws, full_sets=(ws.get("id") == focus_session_id or ws in prev)
+            )
             for ws in extras + picked
         ]
     elif kind in {"exercise", "live_set"}:
@@ -189,12 +283,30 @@ async def build_coach_context(
         sessions_out = [
             _compact_session(ws, full_sets=True) for ws in filtered[-max_n:]
         ]
+    elif kind in WEEKLY_KINDS:
+        picked = sessions[-max_n:]
+        recent_cut = max(0, len(picked) - WEEKLY_RECENT_SESSIONS)
+        sessions_out = []
+        for i, ws in enumerate(picked):
+            if i < recent_cut:
+                sessions_out.append(
+                    _compact_session(ws, full_sets=False, detail="older")
+                )
+            else:
+                sessions_out.append(
+                    _compact_session(ws, full_sets=False, detail="full")
+                )
     else:
         sessions_out = [
             _compact_session(ws, full_sets=False) for ws in sessions[-max_n:]
         ]
 
-    bw = list(snap.get("body_weight_series") or [])[-10:]
+    bw_raw = list(snap.get("body_weight_series") or [])
+    if kind in WEEKLY_KINDS:
+        bw = _sample_bw(bw_raw, WEEKLY_BW_POINTS)
+    else:
+        bw = bw_raw[-10:]
+
     notes = []
     for n in snap.get("notes_timeline") or []:
         if kind in {"exercise", "live_set"}:
@@ -209,16 +321,26 @@ async def build_coach_context(
                 "at": n.get("created_at"),
             }
         )
-    notes = notes[-15:]
+    notes = notes[-15:] if kind not in WEEKLY_KINDS else notes[-40:]
 
     states = []
     for st in snap.get("exercise_state") or []:
         if kind in {"exercise", "live_set"}:
             if focus_exercise_id is not None and st.get("exercise_id") != focus_exercise_id:
                 continue
-        # Prefer stuck / notable
-        if kind in {"week", "month"} and not (st.get("hard_streak") or 0) and not st.get("current_note"):
+        # month: prefer stuck / notable; weekly: all with weights
+        if kind == "month" and not (st.get("hard_streak") or 0) and not st.get(
+            "current_note"
+        ):
             continue
+        if kind in WEEKLY_KINDS:
+            if not (
+                st.get("working_weight")
+                or st.get("suggested_weight")
+                or st.get("hard_streak")
+                or st.get("current_note")
+            ):
+                continue
         states.append(
             {
                 "ex_id": st.get("exercise_id"),
@@ -233,11 +355,18 @@ async def build_coach_context(
                 "note": _trim_note(st.get("current_note")),
             }
         )
-    if kind in {"week", "month"} and len(states) > 20:
+    if kind == "month" and len(states) > 20:
         states = sorted(states, key=lambda x: -(x.get("hard_streak") or 0))[:20]
+    elif kind in WEEKLY_KINDS and len(states) > 60:
+        states = sorted(
+            states,
+            key=lambda x: (
+                -(x.get("hard_streak") or 0),
+                -(float(x.get("ww") or x.get("sw") or 0)),
+            ),
+        )[:60]
 
     user = snap.get("user") or {}
-    # Minimal focus ids; live fields live only in `live` (no duplicate blob)
     focus: dict[str, Any] = {
         "session_id": focus_session_id,
         "exercise_id": focus_exercise_id,
@@ -266,24 +395,27 @@ async def build_coach_context(
     except (ValueError, KeyError):
         phase_ru = str(raw_phase) if raw_phase else None
 
+    user_out: dict[str, Any] = {
+        "phase": phase_ru,
+        "log_level": user.get("log_level"),
+        "bw": user.get("body_weight"),
+        "exp_m": user.get("experience_months"),
+        "code": user.get("short_code"),
+        "sex": user.get("sex"),
+        "age": user.get("age"),
+    }
+    if kind != "live_set" and user.get("height_cm") is not None:
+        user_out["height_cm"] = user.get("height_cm")
+
     out: dict[str, Any] = {
         "kind": kind,
         "window_days": days,
-        "user": {
-            "phase": phase_ru,  # RU label only — not strength gamification
-            "log_level": user.get("log_level"),
-            "bw": user.get("body_weight"),
-            "exp_m": user.get("experience_months"),
-            "code": user.get("short_code"),
-            "sex": user.get("sex"),
-            "age": user.get("age"),
-        },
+        "user": user_out,
         "notes": notes,
         "exercise_state": states,
         "sessions": sessions_out,
         "focus": focus,
     }
-    # Heavy profile blocks — not needed for in-gym set tips
     if kind != "live_set":
         out["adherence"] = snap.get("adherence")
         out["aggregates"] = {
@@ -299,7 +431,8 @@ async def build_coach_context(
             ),
         }
         out["body_weight_series"] = bw
+    if kind in WEEKLY_KINDS:
+        out["schedule"] = await _week_schedule(session)
     if live:
         out["live"] = live
-    # Strength-level standards intentionally omitted — LLM misuses them
     return out

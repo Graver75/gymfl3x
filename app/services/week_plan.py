@@ -318,7 +318,7 @@ async def run_week_plan_for_user(
             "saved": 0,
         }
 
-    ctx = await build_coach_context(session, user.id, kind="week")
+    ctx = await build_coach_context(session, user.id, kind="week_plan")
     allowed = {ex.id for ex in exs}
     saved_total = 0
     raw_parts: list[str] = []

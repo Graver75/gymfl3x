@@ -30,13 +30,17 @@ SYSTEM_PROMPT = """Ты — Бендер: жёсткий, язвительный
 Чужие данные не выдумывай. Для live_set приоритет у актуального JSON."""
 
 DATA_SCHEMA_RU = """Компактный JSON (без дублей):
-• user — фаза прогрессии, лог, вес, стаж, возраст, код (без уровней силы)
+• user — фаза, лог, вес, рост height_cm, стаж, возраст, пол, код (без уровней силы)
 • adherence / aggregates / body_weight_series — week/month/session (в live_set обычно нет)
-• notes, exercise_state (поле m = тренажёр), sessions (в сетах m = тренажёр; без rest_sec)
+• schedule — только week/week_group/week_plan: шаблоны пн–вс
+• notes, exercise_state (m = тренажёр), sessions
+• sessions: sets_n = рабочие подходы (уник. упражнение+номер); parts_n = все куски лога с дропами;
+  свежие сессии — by_ex с полными kg/reps; старые за год — компакт (date/tpl/vol/sets_n/parts_n/top)
 • live — только live_set (machine_name; week_plan текущего упражнения если есть)
 • focus — ids цели + machine_name
 • target_exercises — только week_plan: id/name/machine_name/target_sets…
 • athletes — только session_group / week_group: несколько атлетов с кодами
+• window_days у week* может быть до 365 — история за год; фокус вердикта — целевая/текущая неделя
 • отдыха между подходами в данных нет — рекомендуй отдых сам в тексте совета
 • machine_name / m — конкретный тренажёр; если указан, cues и советы под него"""
 
@@ -63,6 +67,9 @@ DEFAULT_TASKS: dict[str, str] = {
     ),
     "week": (
         "Недельный разбор ОДНОГО атлета. Стиль Бендера.\n"
+        "В JSON sessions может быть история до ~года (window_days); "
+        "фокус вердикта — ТЕКУЩАЯ/последняя неделя, год — только для тренда.\n"
+        "sets_n = рабочие подходы; parts_n = куски лога с дропами — не путай.\n"
         "Структура: стал лучше/хуже за неделю; посещаемость (adherence); "
         "прогресс по ключевым упражнениям (sessions + exercise_state); "
         "прогнозы на следующую неделю; оценка 1–10; 1–2 шутки-приговора.\n"
@@ -70,6 +77,9 @@ DEFAULT_TASKS: dict[str, str] = {
     ),
     "week_group": (
         "Недельная сводка группы. JSON: athletes[] с недельными агрегатами и кодами.\n"
+        "У каждого атлета sessions может покрывать до ~года; "
+        "фокус разбора — ТЕКУЩАЯ неделя / свежие даты; год — тренд и частота.\n"
+        "sets_n = рабочие подходы; parts_n = с дропами — не называй parts_n «подходами на спину».\n"
         "Стиль Бендера — едкий, язвительный, жёстко-шуточный. Структура СТРОГО:\n"
         "1) Вердикт недели для команды (2–4 предложения).\n"
         "2) По кодам — ПОДРОБНО и ЖЁСТЧЕ: для КАЖДОГО кода оценка 1–10; "
@@ -80,11 +90,14 @@ DEFAULT_TASKS: dict[str, str] = {
         "Без уровней силы. Без HTML. Цифры только из JSON."
     ),
     "week_plan": (
-        "СКРЫТЫЙ job: персональный план на целевую неделю. Ответ СТРОГО один JSON "
-        "(без markdown, без текста вокруг).\n"
+        "СКРЫТЫЙ job: персональный план на целевую неделю (week_start). "
+        "Ответ СТРОГО один JSON (без markdown, без текста вокруг).\n"
         "Схема: {\"exercises\":[{\"exercise_id\":int,\"advice\":str,"
         "\"sets\":[{\"n\":int,\"kg\":number,\"reps\":int,\"rpe\":int}]}]}.\n"
         "Покрывай ВСЕ exercise_id из target_exercises. Число подходов ≈ target_sets.\n"
+        "История sessions может быть до ~года — используй для тренда весов; "
+        "цифры плана — под целевую неделю и свежие рабочие веса.\n"
+        "sets_n = рабочие подходы; parts_n = с дропами.\n"
         "advice: стиль Бендера (едкий, язвительный) — РОВНО 3–4 предложения; "
         "если у упражнения есть machine_name — ОБЯЗАТЕЛЬНО учти тренажёр "
         "(посадка, траектория, рычаги/рукояти) в cues/акценте; "
@@ -205,6 +218,9 @@ PROMPT_SEED_FLAGS: dict[str, tuple[str, str]] = {
     "system_prompt_rest_advice_v1": (SETTING_SYSTEM, "__system__"),
     "week_plan_prompt_machine_v1": (f"{SETTING_PREFIX}week_plan", "week_plan"),
     "live_set_prompt_machine_v1": (f"{SETTING_PREFIX}live_set", "live_set"),
+    "week_prompt_year_history_v1": (f"{SETTING_PREFIX}week", "week"),
+    "week_group_prompt_year_history_v1": (f"{SETTING_PREFIX}week_group", "week_group"),
+    "week_plan_prompt_year_history_v1": (f"{SETTING_PREFIX}week_plan", "week_plan"),
 }
 
 
