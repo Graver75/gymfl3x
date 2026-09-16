@@ -58,6 +58,18 @@ def _compact_set(row: dict[str, Any]) -> dict[str, Any]:
     machine = row.get("machine_name")
     if machine:
         out["m"] = machine
+    if row.get("planned_kg") is not None:
+        out["pkg"] = row.get("planned_kg")
+    if row.get("planned_reps") is not None:
+        out["preps"] = row.get("planned_reps")
+    if row.get("planned_rpe") is not None:
+        out["prpe"] = row.get("planned_rpe")
+    if row.get("plan_source"):
+        out["psrc"] = row.get("plan_source")
+    if row.get("followed_kg") is not None:
+        out["fkg"] = row.get("followed_kg")
+    if row.get("followed_reps") is not None:
+        out["freps"] = row.get("followed_reps")
     return out
 
 
@@ -431,6 +443,31 @@ async def build_coach_context(
             ),
         }
         out["body_weight_series"] = bw
+        pa = snap.get("plan_adherence")
+        if pa and (
+            pa.get("with_plan_sets")
+            or pa.get("exercises")
+            or pa.get("deviations")
+        ):
+            # Compact for tokens
+            out["plan_adherence"] = {
+                "with_plan_sets": pa.get("with_plan_sets"),
+                "followed_sets": pa.get("followed_sets"),
+                "deviated_sets": pa.get("deviated_sets"),
+                "exercises": (pa.get("exercises") or [])[:30],
+                "deviations": (pa.get("deviations") or [])[-20:],
+            }
+        wps = snap.get("week_plans") or []
+        if wps and kind in WEEKLY_KINDS | {"exercise", "month", "session"}:
+            out["week_plans"] = [
+                {
+                    "ex_id": wp.get("exercise_id"),
+                    "ex": wp.get("exercise_name"),
+                    "sets": wp.get("sets"),
+                    "advice": wp.get("advice"),
+                }
+                for wp in wps[:40]
+            ]
     if kind in WEEKLY_KINDS:
         out["schedule"] = await _week_schedule(session)
     if live:

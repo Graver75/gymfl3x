@@ -658,6 +658,7 @@ async def workout_arch_pick(callback: CallbackQuery, state: FSMContext) -> None:
             drop_index=0,
             last_action_at=touch_action_iso(),
             machine_name=machine_name,
+            live_suggest=None,
         )
         user_id = user.id
         exercise_name = item.name
@@ -747,6 +748,7 @@ async def pick_exercise(callback: CallbackQuery, state: FSMContext) -> None:
         drop_index=0,
         last_action_at=touch_action_iso(),
         machine_name=machine_name,
+        live_suggest=None,
     )
     loaded = await _load_presets_into_state(
         state,
@@ -850,15 +852,22 @@ async def note_save(message: Message, state: FSMContext) -> None:
 def _live_set_rows(parts: list[dict]) -> list[dict]:
     rows: list[dict] = []
     for p in parts:
-        rows.append(
-            {
-                "n": int(p.get("set_number") or 0),
-                "d": int(p.get("drop_index") or 0),
-                "kg": p.get("weight"),
-                "reps": p.get("reps"),
-                "rpe": p.get("rpe"),
-            }
-        )
+        row: dict = {
+            "n": int(p.get("set_number") or 0),
+            "d": int(p.get("drop_index") or 0),
+            "kg": p.get("weight"),
+            "reps": p.get("reps"),
+            "rpe": p.get("rpe"),
+        }
+        if p.get("planned_kg") is not None:
+            row["pkg"] = p.get("planned_kg")
+        if p.get("planned_reps") is not None:
+            row["preps"] = p.get("planned_reps")
+        if p.get("planned_rpe") is not None:
+            row["prpe"] = p.get("planned_rpe")
+        if p.get("plan_source"):
+            row["psrc"] = p.get("plan_source")
+        rows.append(row)
     return rows
 
 
@@ -980,6 +989,9 @@ async def workout_live_coach(callback: CallbackQuery, state: FSMContext) -> None
             week_plan = plan_to_live_blob(plan_row)
     if week_plan:
         live["week_plan"] = week_plan
+    live_suggest = data.get("live_suggest")
+    if isinstance(live_suggest, dict) and live_suggest.get("kg") is not None:
+        live["live_suggest"] = live_suggest
     if live["saved_sets_in_session"] is None:
         live.pop("saved_sets_in_session")
 
@@ -1000,6 +1012,7 @@ async def workout_live_coach(callback: CallbackQuery, state: FSMContext) -> None
             focus_exercise_name=name,
             live=live,
             waiting_message=waiting,
+            fsm_state=state,
         )
     )
 
@@ -1181,15 +1194,23 @@ async def _append_reps_and_continue(
 ) -> None:
     data = await state.get_data()
     logged = list(data.get("logged") or [])
-    logged.append(
-        {
-            "set_number": int(data.get("current_set") or 1),
-            "drop_index": int(data.get("drop_index") or 0),
-            "weight": float(data["draft_weight"]),
-            "reps": reps,
-            "rpe": None,
-        }
+    set_number = int(data.get("current_set") or 1)
+    drop_index = int(data.get("drop_index") or 0)
+    from app.services.week_plan import planned_target_from_fsm
+
+    part: dict = {
+        "set_number": set_number,
+        "drop_index": drop_index,
+        "weight": float(data["draft_weight"]),
+        "reps": reps,
+        "rpe": None,
+    }
+    planned = planned_target_from_fsm(
+        data, set_number=set_number, drop_index=drop_index
     )
+    if planned:
+        part.update(planned)
+    logged.append(part)
     await state.update_data(
         logged=logged,
         draft_reps=reps,
@@ -1514,6 +1535,10 @@ async def pick_difficulty(callback: CallbackQuery, state: FSMContext) -> None:
                     set_number=int(part["set_number"]),
                     drop_index=int(part["drop_index"]),
                     rpe_1_10=part.get("rpe"),
+                    planned_kg=part.get("planned_kg"),
+                    planned_reps=part.get("planned_reps"),
+                    planned_rpe=part.get("planned_rpe"),
+                    plan_source=part.get("plan_source"),
                 )
             )
         await upsert_archive(session, exercise.name, overwrite_targets=False)
@@ -1582,6 +1607,12 @@ async def pick_difficulty(callback: CallbackQuery, state: FSMContext) -> None:
             current_set=1,
             drop_index=0,
             last_action_at=touch_action_iso(),
+            live_suggest=None,
+            week_plan=None,
+            week_plan_html=None,
+            ai_plan_kg=None,
+            ai_plan_reps=None,
+            ai_plan_rpe=None,
         )
 
         if template:

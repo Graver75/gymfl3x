@@ -16,10 +16,13 @@ from app.db.models import (
     SessionStatus,
     User,
     UserExerciseState,
+    UserExerciseWeekPlan,
     WorkoutSession,
 )
 from app.services.reminders import get_template_for_weekday
 from app.services.users import effective_experience_months
+
+KG_FOLLOW_TOL = 0.5
 
 
 def _iso(dt: datetime | date | None) -> str | None:
@@ -38,6 +41,136 @@ def _rest_seconds(prev: datetime | None, cur: datetime | None) -> int | None:
     if cur.tzinfo is None:
         cur = cur.replace(tzinfo=timezone.utc)
     return max(0, int((cur - prev).total_seconds()))
+
+
+def _followed_kg(actual: float | None, planned: float | None) -> bool | None:
+    if actual is None or planned is None:
+        return None
+    try:
+        return abs(float(actual) - float(planned)) <= KG_FOLLOW_TOL
+    except (TypeError, ValueError):
+        return None
+
+
+def _followed_reps(actual: int | None, planned: int | None) -> bool | None:
+    if actual is None or planned is None:
+        return None
+    try:
+        return int(actual) == int(planned)
+    except (TypeError, ValueError):
+        return None
+
+
+def _note_for_set(
+    notes: list[Any],
+    *,
+    session_id: int | None,
+    exercise_id: int | None,
+    exercise_name: str | None,
+) -> str | None:
+    for n in reversed(notes):
+        if session_id is not None and n.session_id == session_id:
+            if exercise_id is not None and n.exercise_id == exercise_id:
+                return (n.text or "").strip() or None
+            if exercise_name and n.exercise_name == exercise_name:
+                return (n.text or "").strip() or None
+        if exercise_id is not None and n.exercise_id == exercise_id and not n.cleared:
+            text = (n.text or "").strip()
+            if text:
+                return text
+    return None
+
+
+def _build_plan_adherence(
+    session_payloads: list[dict[str, Any]],
+    notes: list[Any],
+) -> dict[str, Any]:
+    """Aggregate planned vs actual from stamped SessionSet fields."""
+    by_ex: dict[str, dict[str, Any]] = {}
+    deviations: list[dict[str, Any]] = []
+
+    for ws in session_payloads:
+        sid = ws.get("id")
+        for s in ws.get("sets") or []:
+            pkg = s.get("planned_kg")
+            preps = s.get("planned_reps")
+            if pkg is None and preps is None:
+                continue
+            name = s.get("exercise_name") or "?"
+            key = str(s.get("exercise_id") or name)
+            slot = by_ex.setdefault(
+                key,
+                {
+                    "exercise_id": s.get("exercise_id"),
+                    "exercise_name": name,
+                    "sets_n": 0,
+                    "with_plan_n": 0,
+                    "followed_n": 0,
+                    "deviated_n": 0,
+                    "kg_deltas": [],
+                    "reps_deltas": [],
+                },
+            )
+            slot["sets_n"] += 1
+            slot["with_plan_n"] += 1
+            fk = s.get("followed_kg")
+            fr = s.get("followed_reps")
+            followed = True
+            if fk is False or fr is False:
+                followed = False
+            elif fk is None and fr is None:
+                followed = False
+            if followed:
+                slot["followed_n"] += 1
+            else:
+                slot["deviated_n"] += 1
+                note = _note_for_set(
+                    notes,
+                    session_id=sid if isinstance(sid, int) else None,
+                    exercise_id=s.get("exercise_id"),
+                    exercise_name=name,
+                )
+                dev: dict[str, Any] = {
+                    "ex": name,
+                    "n": s.get("set_number"),
+                    "planned": {"kg": pkg, "reps": preps},
+                    "actual": {"kg": s.get("weight"), "reps": s.get("reps")},
+                    "psrc": s.get("plan_source"),
+                    "date": ws.get("date"),
+                }
+                if note:
+                    dev["note"] = note[:120]
+                deviations.append(dev)
+            try:
+                if pkg is not None and s.get("weight") is not None:
+                    slot["kg_deltas"].append(float(s["weight"]) - float(pkg))
+            except (TypeError, ValueError):
+                pass
+            try:
+                if preps is not None and s.get("reps") is not None:
+                    slot["reps_deltas"].append(int(s["reps"]) - int(preps))
+            except (TypeError, ValueError):
+                pass
+
+    exercises: list[dict[str, Any]] = []
+    for slot in by_ex.values():
+        kg_d = slot.pop("kg_deltas")
+        reps_d = slot.pop("reps_deltas")
+        slot["avg_kg_delta"] = (
+            round(sum(kg_d) / len(kg_d), 2) if kg_d else None
+        )
+        slot["avg_reps_delta"] = (
+            round(sum(reps_d) / len(reps_d), 2) if reps_d else None
+        )
+        exercises.append(slot)
+
+    return {
+        "exercises": exercises,
+        "deviations": deviations[-40:],
+        "with_plan_sets": sum(e["with_plan_n"] for e in exercises),
+        "followed_sets": sum(e["followed_n"] for e in exercises),
+        "deviated_sets": sum(e["deviated_n"] for e in exercises),
+    }
 
 
 async def build_athlete_snapshot(
@@ -96,6 +229,7 @@ async def build_athlete_snapshot(
 
     from app.db.models import ExerciseArchive
     from app.services.archive import name_key
+    from app.services.week_plan import monday_of, parse_sets_json
 
     arch_machines: dict[str, str] = {
         a.name_key: a.machine_name
@@ -111,21 +245,31 @@ async def build_athlete_snapshot(
             machine = s.exercise.machine_name if s.exercise else None
             if not machine and s.exercise_name:
                 machine = arch_machines.get(name_key(s.exercise_name))
-            set_rows.append(
-                {
-                    "exercise_id": s.exercise_id,
-                    "exercise_name": s.exercise_name,
-                    "machine_name": machine,
-                    "set_number": s.set_number,
-                    "drop_index": s.drop_index,
-                    "reps": s.reps,
-                    "weight": s.weight,
-                    "volume": s.volume,
-                    "difficulty": s.difficulty.value if s.difficulty else None,
-                    "rpe_1_10": s.rpe_1_10,
-                    "created_at": _iso(s.created_at),
-                }
-            )
+            planned_kg = getattr(s, "planned_kg", None)
+            planned_reps = getattr(s, "planned_reps", None)
+            planned_rpe = getattr(s, "planned_rpe", None)
+            plan_source = getattr(s, "plan_source", None)
+            row: dict[str, Any] = {
+                "exercise_id": s.exercise_id,
+                "exercise_name": s.exercise_name,
+                "machine_name": machine,
+                "set_number": s.set_number,
+                "drop_index": s.drop_index,
+                "reps": s.reps,
+                "weight": s.weight,
+                "volume": s.volume,
+                "difficulty": s.difficulty.value if s.difficulty else None,
+                "rpe_1_10": s.rpe_1_10,
+                "created_at": _iso(s.created_at),
+            }
+            if planned_kg is not None or planned_reps is not None:
+                row["planned_kg"] = planned_kg
+                row["planned_reps"] = planned_reps
+                row["planned_rpe"] = planned_rpe
+                row["plan_source"] = plan_source
+                row["followed_kg"] = _followed_kg(s.weight, planned_kg)
+                row["followed_reps"] = _followed_reps(s.reps, planned_reps)
+            set_rows.append(row)
         duration_sec = None
         if ws.started_at and ws.finished_at:
             duration_sec = _rest_seconds(ws.started_at, ws.finished_at)
@@ -160,6 +304,32 @@ async def build_athlete_snapshot(
         scheduled_days += 1
         if day in finished_dates:
             logged_on_schedule += 1
+
+    plan_adherence = _build_plan_adherence(session_payloads, list(notes))
+
+    week_start = monday_of(date.today())
+    week_plan_rows = (
+        await session.execute(
+            select(UserExerciseWeekPlan)
+            .where(
+                UserExerciseWeekPlan.user_id == user_id,
+                UserExerciseWeekPlan.week_start == week_start,
+            )
+            .options(selectinload(UserExerciseWeekPlan.exercise))
+        )
+    ).scalars().all()
+    week_plans: list[dict[str, Any]] = []
+    for plan in week_plan_rows:
+        advice = (plan.advice or "").strip()
+        week_plans.append(
+            {
+                "exercise_id": plan.exercise_id,
+                "exercise_name": plan.exercise.name if plan.exercise else None,
+                "week_start": plan.week_start.isoformat(),
+                "sets": parse_sets_json(plan.sets_json),
+                "advice": advice[:200] if advice else None,
+            }
+        )
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -218,5 +388,7 @@ async def build_athlete_snapshot(
             "logged_on_schedule": logged_on_schedule,
             "finished_sessions": len(sessions),
         },
+        "plan_adherence": plan_adherence,
+        "week_plans": week_plans,
         "sessions": session_payloads,
     }

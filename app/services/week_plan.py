@@ -89,6 +89,115 @@ def set_for_number(sets: list[dict[str, Any]], set_number: int) -> dict[str, Any
     return None
 
 
+_GF_NEXT_RE = re.compile(
+    r"(?im)^[ \t]*GF_NEXT:\s*"
+    r"(?:none|"
+    r"kg\s*=\s*([\d.,]+)\s+reps\s*=\s*(\d+)"
+    r"(?:\s+rpe\s*=\s*(\d+))?)"
+    r"\s*$"
+)
+
+
+def parse_gf_next(text: str) -> tuple[str, dict[str, Any] | None, bool]:
+    """Strip GF_NEXT line from live_set reply.
+
+    Returns (clean_text, suggest_or_None, explicit_none).
+    - suggest: {kg, reps, rpe?} when GF_NEXT: kg=… reps=…
+    - explicit_none=True when GF_NEXT: none (clear FSM live_suggest)
+    - if no GF_NEXT line: (text, None, False) — leave FSM unchanged
+    """
+    if not text:
+        return text, None, False
+    lines = text.splitlines()
+    kept: list[str] = []
+    suggest: dict[str, Any] | None = None
+    explicit_none = False
+    found = False
+    for line in lines:
+        m = _GF_NEXT_RE.match(line.strip())
+        if not m:
+            kept.append(line)
+            continue
+        found = True
+        raw = line.strip()
+        if re.search(r"(?i)GF_NEXT:\s*none\s*$", raw):
+            explicit_none = True
+            suggest = None
+        else:
+            kg_s, reps_s, rpe_s = m.group(1), m.group(2), m.group(3)
+            try:
+                kg = float(str(kg_s).replace(",", "."))
+                reps = int(reps_s)
+            except (TypeError, ValueError):
+                continue
+            suggest = {"kg": kg, "reps": reps}
+            if rpe_s is not None:
+                try:
+                    suggest["rpe"] = int(rpe_s)
+                except (TypeError, ValueError):
+                    pass
+    if not found:
+        return text, None, False
+    clean = "\n".join(kept).strip()
+    return clean, suggest, explicit_none
+
+
+def planned_target_from_fsm(
+    data: dict[str, Any],
+    *,
+    set_number: int,
+    drop_index: int = 0,
+) -> dict[str, Any] | None:
+    """Resolve AI proposal for a logged set: live_suggest > week_plan slot."""
+    if int(drop_index or 0) != 0:
+        return None
+    live = data.get("live_suggest")
+    if isinstance(live, dict) and live.get("kg") is not None and live.get("reps") is not None:
+        out: dict[str, Any] = {
+            "planned_kg": float(live["kg"]),
+            "planned_reps": int(live["reps"]),
+            "plan_source": "live",
+        }
+        if live.get("rpe") is not None:
+            try:
+                out["planned_rpe"] = int(live["rpe"])
+            except (TypeError, ValueError):
+                pass
+        return out
+    week_plan = data.get("week_plan")
+    if not isinstance(week_plan, dict):
+        return None
+    sets = week_plan.get("sets") or []
+    if not isinstance(sets, list):
+        return None
+    row = set_for_number(sets, int(set_number))
+    if not row:
+        return None
+    kg = row.get("kg")
+    reps = row.get("reps")
+    if kg is None and reps is None:
+        return None
+    out = {"plan_source": "week_plan"}
+    if kg is not None:
+        try:
+            out["planned_kg"] = float(kg)
+        except (TypeError, ValueError):
+            pass
+    if reps is not None:
+        try:
+            out["planned_reps"] = int(reps)
+        except (TypeError, ValueError):
+            pass
+    if row.get("rpe") is not None:
+        try:
+            out["planned_rpe"] = int(row["rpe"])
+        except (TypeError, ValueError):
+            pass
+    if "planned_kg" not in out and "planned_reps" not in out:
+        return None
+    return out
+
+
 def extract_json_object(text: str) -> dict[str, Any] | None:
     if not text:
         return None

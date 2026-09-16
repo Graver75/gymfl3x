@@ -45,11 +45,16 @@ SYSTEM_PROGRAM_REVIEW = """Ты — опытный русскоязычный ф
 DATA_SCHEMA_RU = """Компактный JSON (без дублей):
 • user — фаза, лог, вес, рост height_cm, стаж, возраст, пол, код (без уровней силы)
 • adherence / aggregates / body_weight_series — week/month/session (в live_set обычно нет)
+• plan_adherence — follow/ignore ИИ-плана: followed_sets/deviated_sets, exercises[], deviations[]
+  (planned vs actual + note если есть); не путать с adherence посещаемости
+• week_plans — план ИИ текущей недели (ex_id, sets[{n,kg,reps,rpe}], advice) — не live_set
 • schedule — только week/week_group/week_plan: шаблоны пн–вс
 • notes, exercise_state (m = тренажёр), sessions
 • sessions: sets_n = рабочие подходы (уник. упражнение+номер); parts_n = все куски лога с дропами;
-  свежие сессии — by_ex с полными kg/reps; старые за год — компакт (date/tpl/vol/sets_n/parts_n/top)
-• live — только live_set (machine_name; week_plan текущего упражнения если есть)
+  свежие сессии — by_ex с полными kg/reps; старые за год — компакт (date/tpl/vol/sets_n/parts_n/top);
+  в полных sets[] могут быть pkg/preps/psrc/fkg/freps (план ИИ vs факт)
+• live — только live_set (machine_name; week_plan текущего упражнения если есть;
+  logged_sets могут содержать pkg/preps)
 • focus — ids цели + machine_name
 • target_exercises — только week_plan: id/name/machine_name/target_sets…
 • athletes — только session_group / week_group: несколько атлетов с кодами
@@ -83,8 +88,11 @@ DEFAULT_TASKS: dict[str, str] = {
         "В JSON sessions может быть история до ~года (window_days); "
         "фокус вердикта — ТЕКУЩАЯ/последняя неделя, год — только для тренда.\n"
         "sets_n = рабочие подходы; parts_n = куски лога с дропами — не путай.\n"
+        "Смотри plan_adherence: следовал ли атлет ИИ-плану (followed/deviated); "
+        "при отклонениях читай deviations[].note и notes — «почему» игнор; "
+        "не ругай слепо, если note объясняет (боль/усталость/отказ).\n"
         "Структура: стал лучше/хуже за неделю; посещаемость (adherence); "
-        "прогресс по ключевым упражнениям (sessions + exercise_state); "
+        "прогресс по ключевым упражнениям (sessions + exercise_state + plan_adherence); "
         "прогнозы на следующую неделю; оценка 1–10; 1–2 шутки-приговора.\n"
         "Без уровней силы. Не больше ~12 предложений. Цифры только из JSON."
     ),
@@ -93,6 +101,7 @@ DEFAULT_TASKS: dict[str, str] = {
         "У каждого атлета sessions может покрывать до ~года; "
         "фокус разбора — ТЕКУЩАЯ неделя / свежие даты; год — тренд и частота.\n"
         "sets_n = рабочие подходы; parts_n = с дропами — не называй parts_n «подходами на спину».\n"
+        "Учитывай plan_adherence по кодам (follow/ignore плана ИИ + notes на отклонениях).\n"
         "Стиль Бендера — едкий, язвительный, жёстко-шуточный. Структура СТРОГО:\n"
         "1) Вердикт недели для команды (2–4 предложения).\n"
         "2) По кодам — ПОДРОБНО и ЖЁСТЧЕ: для КАЖДОГО кода оценка 1–10; "
@@ -111,6 +120,11 @@ DEFAULT_TASKS: dict[str, str] = {
         "Покрывай ВСЕ exercise_id из target_exercises. Число подходов ≈ target_sets.\n"
         "История sessions может быть до ~года — используй для тренда весов; "
         "цифры плана — под целевую неделю и свежие рабочие веса.\n"
+        "Обязательно смотри plan_adherence и week_plans прошлой/текущей недели: "
+        "если атлет систематически ниже плана — снижай kg/reps или RPE; "
+        "если выше и followed — можно чуть поднять; "
+        "если ignore + note (боль/усталость) — адаптируй, не игнорь note; "
+        "если ignore без note — опирайся на факт, не на желаемый ww/sw.\n"
         "sets_n = рабочие подходы; parts_n = с дропами.\n"
         "advice: стиль Бендера (едкий, язвительный) — РОВНО 3–4 предложения; "
         "если у упражнения есть machine_name — ОБЯЗАТЕЛЬНО учти тренажёр "
@@ -124,13 +138,15 @@ DEFAULT_TASKS: dict[str, str] = {
     ),
     "month": (
         "Разбор за примерно месяц. Стиль Бендера, но без воды: "
-        "прогресс/застой, adherence, вес тела, паттерны RPE/hard_streak, "
+        "прогресс/застой, adherence, plan_adherence (follow ИИ-плана), "
+        "вес тела, паттерны RPE/hard_streak, "
         "оценка 1–10 и прогноз. Без уровней силы. ~12 предложений."
     ),
     "exercise": (
         "Структура: (1) техника по athlete.focus.exercise_name "
         "(учти machine_name / m — конкретный тренажёр) — 3–5 cues; "
-        "(2) summary: история, веса, exercise_state; мягкий/едкий совет; "
+        "(2) summary: история, веса, exercise_state, plan_adherence по этому движению "
+        "(следовал ли плану / отклонения + notes); мягкий/едкий совет; "
         "по желанию рекомендуй отдых между подходами (в данных его нет).\n"
         "Без уровней силы. Цифры нагрузки только из JSON."
     ),
@@ -141,11 +157,19 @@ DEFAULT_TASKS: dict[str, str] = {
         "текст live.week_plan.advice; не дублируй те же формулировки.\n"
         "(1) техника 3–5 cues на ЭТОТ подход сейчас — если live.machine_name "
         "или focus.machine_name есть, cues ПОД ЭТОТ тренажёр (не общие); "
-        "(2) корректировка по уже залогированным сетам сессии; "
+        "(2) корректировка по уже залогированным сетам сессии "
+        "(сравни kg/reps с pkg/preps в logged_sets если есть — follow/ignore); "
+        "если в notes есть пояснение отклонения — учти «почему»; "
         "(3) при необходимости дай ориентир по отдыху до следующего подхода "
         "(секунд в JSON нет — рекомендуй сам).\n"
         "цифры плана (kg/reps/rpe) можно кратко опереться, без повтора advice.\n"
-        "Без уровней силы. 6–8 предложений. Цифры нагрузки только из JSON."
+        "ОБЯЗАТЕЛЬНО последней строкой ответа (отдельно, без прозы вокруг):\n"
+        "GF_NEXT: kg=<число> reps=<целое> [rpe=<целое>] — если даёшь числовой совет "
+        "на следующий/текущий подход;\n"
+        "или GF_NEXT: none — если только техника/отдых без смены цифр.\n"
+        "Строку GF_NEXT пользователь не увидит (её срежет бот).\n"
+        "Без уровней силы. 6–8 предложений + строка GF_NEXT. "
+        "Цифры нагрузки только из JSON."
     ),
     "program_review": (
         "СКРЫТЫЙ job: оценка ОБЩЕЙ программы зала (не персональный разбор).\n"
@@ -294,30 +318,31 @@ _KIND_PAYLOAD_BRIEF: dict[str, str] = {
     "week": (
         "Один атлет · до 365 дн. Личное: phase/bw/height/sex/age/exp_m/code. "
         "Прогресс: sessions (год), exercise_state (ww/sw/streak), notes, "
-        "adherence, aggregates, BW(~52), schedule пн–вс. Без live / athletes."
+        "adherence, plan_adherence, week_plans, aggregates, BW(~52), schedule пн–вс. "
+        "Без live / athletes."
     ),
     "week_group": (
-        "athletes[] — у каждого полный week-контекст (личное + год прогресса). "
+        "athletes[] — у каждого полный week-контекст (личное + год + plan_adherence). "
         "Фокус вердикта — текущая неделя. Без target_exercises."
     ),
     "week_plan": (
-        "Как week (личное + год прогресса) + week_start + target_exercises[] "
-        "(id/name/machine/targets). Ответ — JSON плана, не текст в чат."
+        "Как week (личное + год + plan_adherence + week_plans) + week_start + "
+        "target_exercises[] (id/name/machine/targets). Ответ — JSON плана, не текст в чат."
     ),
     "month": (
         "Один атлет · ~45 дн · до 18 сессий. user, sessions (by_ex), "
         "exercise_state (в основном hard_streak/note), notes, adherence, "
-        "aggregates, BW. Без live / schedule / athletes."
+        "plan_adherence, aggregates, BW. Без live / schedule / athletes."
     ),
     "exercise": (
         "Один атлет · ~45 дн · сессии только с этим упражнением (полные сеты). "
         "focus.exercise_id/name + machine_name, exercise_state этого движения, "
-        "notes. Без live."
+        "notes, plan_adherence. Без live."
     ),
     "live_set": (
         "Один атлет · ~45 дн по упражнению + athlete.live: machine_name, "
-        "current_set, draft kg/reps, logged_sets, week_plan (advice+sets) "
-        "для анти-дубля. Без adherence/aggregates/BW в payload."
+        "current_set, draft kg/reps, logged_sets (pkg/preps), week_plan "
+        "для анти-дубля. Ответ: текст + GF_NEXT. Без adherence/aggregates/BW."
     ),
     "program_review": (
         "Только структура программы: schedule пн–вс + templates/exercises "
@@ -372,15 +397,17 @@ _KIND_PAYLOAD_FULL: dict[str, str] = {
         "Прогресс / история:\n"
         "· schedule[] пн–вс (tpl)\n"
         "· sessions[] — recent: by_ex kg/reps, sets_n/parts_n, checkin, m, diff, rpe;\n"
-        "  older (до года): date/tpl/vol/sets_n/parts_n/top[2]\n"
+        "  older (до года): date/tpl/vol/sets_n/parts_n/top[2];\n"
+        "  полные sets[] могут иметь pkg/preps/psrc/fkg/freps\n"
         "· exercise_state[] — ww/sw/last_reps/sets/diff/hard_streak/note/m (до ~60)\n"
-        "· notes[], adherence, aggregates, body_weight_series (~52)\n\n"
+        "· notes[], adherence, plan_adherence, week_plans,\n"
+        "  aggregates, body_weight_series (~52)\n\n"
         "Нет: live, athletes, target_exercises, уровни силы"
     ),
     "week_group": (
         "kind=week_group\n"
         "athletes[] — у каждого полный week-payload:\n"
-        "личное (phase/bw/height/sex/age/exp_m) + год прогресса.\n"
+        "личное (phase/bw/height/sex/age/exp_m) + год прогресса + plan_adherence.\n"
         "Фокус текста — текущая неделя; год для тренда.\n\n"
         "Нет: target_exercises, live"
     ),
@@ -392,7 +419,8 @@ _KIND_PAYLOAD_FULL: dict[str, str] = {
         "прогресс:\n"
         "· sessions до 365д (свежие полные by_ex, старые компакт)\n"
         "· exercise_state (ww/sw, streak, notes)\n"
-        "· notes, adherence, aggregates, body_weight_series, schedule\n\n"
+        "· notes, adherence, plan_adherence, week_plans,\n"
+        "  aggregates, body_weight_series, schedule\n\n"
         "плюс:\n"
         "· week_start\n"
         "· target_exercises[]: exercise_id, name, machine_name,\n"
@@ -404,16 +432,16 @@ _KIND_PAYLOAD_FULL: dict[str, str] = {
     "month": (
         "kind=month\n"
         "window_days=45 · max_sessions=18\n\n"
-        "user, sessions (by_ex), notes, adherence, aggregates, BW,\n"
-        "exercise_state в основном с hard_streak или note.\n\n"
+        "user, sessions (by_ex), notes, adherence, plan_adherence,\n"
+        "aggregates, BW, exercise_state в основном с hard_streak или note.\n\n"
         "Нет: live, schedule, athletes, target_exercises"
     ),
     "exercise": (
         "kind=exercise\n"
         "window_days=45\n\n"
         "· focus.exercise_id / exercise_name / machine_name\n"
-        "· sessions — только с этим упражнением, полные sets[]\n"
-        "· exercise_state / notes — только это движение\n"
+        "· sessions — только с этим упражнением, полные sets[] (pkg/preps…)\n"
+        "· exercise_state / notes / plan_adherence — только это движение\n"
         "· user, adherence, aggregates, BW\n\n"
         "Нет: live, athletes, target_exercises"
     ),
@@ -423,9 +451,10 @@ _KIND_PAYLOAD_FULL: dict[str, str] = {
         "athlete.live:\n"
         "· exercise_id/name, session_id, screen, current_set, sets_done, drop_index\n"
         "· target, draft_weight/reps\n"
-        "· logged_sets[], saved_sets_in_session?\n"
+        "· logged_sets[] (могут быть pkg/preps/psrc), saved_sets_in_session?\n"
         "· machine_name\n"
         "· week_plan? {week_start, advice, sets[]} — уже на карточке, не дублировать\n\n"
+        "Ответ модели: текст + последняя строка GF_NEXT: kg=… reps=… | none\n"
         "focus + machine_name\n"
         "Нет в live_set: adherence, aggregates, body_weight_series"
     ),
@@ -472,6 +501,12 @@ PROMPT_SEED_FLAGS: dict[str, tuple[str, str]] = {
     "program_review_prompt_v2": (f"{SETTING_PREFIX}program_review", "program_review"),
     "program_review_system_v1": (SETTING_SYSTEM_PROGRAM_REVIEW, "program_review_system"),
     "program_review_system_v2": (SETTING_SYSTEM_PROGRAM_REVIEW, "program_review_system"),
+    "plan_adherence_live_set_v1": (f"{SETTING_PREFIX}live_set", "live_set"),
+    "plan_adherence_week_v1": (f"{SETTING_PREFIX}week", "week"),
+    "plan_adherence_week_group_v1": (f"{SETTING_PREFIX}week_group", "week_group"),
+    "plan_adherence_week_plan_v1": (f"{SETTING_PREFIX}week_plan", "week_plan"),
+    "plan_adherence_exercise_v1": (f"{SETTING_PREFIX}exercise", "exercise"),
+    "plan_adherence_month_v1": (f"{SETTING_PREFIX}month", "month"),
 }
 
 

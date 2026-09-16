@@ -75,6 +75,7 @@ async def run_coach_and_reply(
     focus_exercise_name: str | None = None,
     live: dict[str, Any] | None = None,
     waiting_message: Message | None = None,
+    fsm_state: Any | None = None,
 ) -> None:
     """Fetch coach text and send/edit a Telegram message. Never raises."""
     try:
@@ -136,6 +137,19 @@ async def run_coach_and_reply(
                 f"{ui.ICO_NN} Не удалось получить разбор (таймаут, квота или провайдер)."
             )
             return
+
+        if kind == "live_set":
+            from app.services.week_plan import parse_gf_next
+
+            raw, suggest, explicit_none = parse_gf_next(raw)
+            if fsm_state is not None:
+                try:
+                    if explicit_none:
+                        await fsm_state.update_data(live_suggest=None)
+                    elif suggest is not None:
+                        await fsm_state.update_data(live_suggest=suggest)
+                except Exception:
+                    logger.exception("Failed to store live_suggest in FSM")
 
         if kind == "live_set" and live:
             user_summary = (

@@ -148,6 +148,16 @@ async def _add_missing_columns(conn) -> None:
     cols = {row[1] for row in result}
     if "rpe_1_10" not in cols:
         await conn.execute(text("ALTER TABLE session_sets ADD COLUMN rpe_1_10 INTEGER"))
+    if "planned_kg" not in cols:
+        await conn.execute(text("ALTER TABLE session_sets ADD COLUMN planned_kg FLOAT"))
+    if "planned_reps" not in cols:
+        await conn.execute(text("ALTER TABLE session_sets ADD COLUMN planned_reps INTEGER"))
+    if "planned_rpe" not in cols:
+        await conn.execute(text("ALTER TABLE session_sets ADD COLUMN planned_rpe INTEGER"))
+    if "plan_source" not in cols:
+        await conn.execute(
+            text("ALTER TABLE session_sets ADD COLUMN plan_source VARCHAR(16)")
+        )
 
     # Strength standards: ensure t6..t10 exist (migration 5 → 10 levels)
     result = await conn.execute(text("PRAGMA table_info(exercise_strength_standard)"))
