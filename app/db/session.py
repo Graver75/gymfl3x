@@ -30,6 +30,7 @@ def _sqlite_pragma(dbapi_connection, _connection_record) -> None:  # noqa: ANN00
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA busy_timeout=30000")
         cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA foreign_keys=ON")
     finally:
         cursor.close()
 
@@ -81,6 +82,8 @@ async def _add_missing_columns(conn) -> None:
         await conn.execute(text("ALTER TABLE users ADD COLUMN sex VARCHAR(16)"))
     if "age" not in cols:
         await conn.execute(text("ALTER TABLE users ADD COLUMN age INTEGER"))
+    if "height_cm" not in cols:
+        await conn.execute(text("ALTER TABLE users ADD COLUMN height_cm FLOAT"))
     if "experience_as_of" not in cols:
         await conn.execute(
             text("ALTER TABLE users ADD COLUMN experience_as_of DATETIME")

@@ -13,6 +13,7 @@ from app.db.models import (
     NnDialogMessage,
     User,
     UserExerciseState,
+    UserExerciseWeekPlan,
     WorkoutSession,
 )
 from app.services.metrics_log import log_body_weight
@@ -159,6 +160,9 @@ async def reset_own_training_data(session: AsyncSession, user_id: int) -> dict[s
     dialog = await session.execute(
         delete(NnDialogMessage).where(NnDialogMessage.user_id == user_id)
     )
+    plans = await session.execute(
+        delete(UserExerciseWeekPlan).where(UserExerciseWeekPlan.user_id == user_id)
+    )
     await session.commit()
     return {
         "sessions": sessions.rowcount or 0,
@@ -166,4 +170,5 @@ async def reset_own_training_data(session: AsyncSession, user_id: int) -> dict[s
         "body_weight_logs": bw.rowcount or 0,
         "note_logs": notes.rowcount or 0,
         "nn_dialog": dialog.rowcount or 0,
+        "week_plans": plans.rowcount or 0,
     }

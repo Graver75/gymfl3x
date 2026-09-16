@@ -126,11 +126,12 @@ async def send_evening_recaps(bot: Bot, settings: Settings) -> None:
                     fact_text=text,
                 )
                 if ai_block:
-                    out = f"{text}\n\n{ui.ICO_NN} Разбор ИИ\n{ai_block}"
+                    safe_ai = ui.coach_html(ai_block)
+                    out = f"{text}\n\n{ui.ICO_NN} Разбор ИИ\n{safe_ai}"
                     if len(out) > 4000:
                         room = 4000 - len(text) - 30
                         if room > 200:
-                            out = f"{text}\n\n{ui.ICO_NN} Разбор ИИ\n{ai_block[:room]}…"
+                            out = f"{text}\n\n{ui.ICO_NN} Разбор ИИ\n{safe_ai[:room]}…"
                         else:
                             out = text[:3990] + "…"
             except Exception:

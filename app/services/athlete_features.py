@@ -229,7 +229,7 @@ async def build_athlete_snapshot(
 
     from app.db.models import ExerciseArchive
     from app.services.archive import name_key
-    from app.services.week_plan import monday_of, parse_sets_json
+    from app.services.week_plan import monday_of, parse_sets_json, target_week_start
 
     arch_machines: dict[str, str] = {
         a.name_key: a.machine_name
@@ -307,13 +307,18 @@ async def build_athlete_snapshot(
 
     plan_adherence = _build_plan_adherence(session_payloads, list(notes))
 
-    week_start = monday_of(date.today())
+    today = date.today()
+    week_starts = {
+        monday_of(today) - timedelta(days=7),
+        monday_of(today),
+        target_week_start(today),
+    }
     week_plan_rows = (
         await session.execute(
             select(UserExerciseWeekPlan)
             .where(
                 UserExerciseWeekPlan.user_id == user_id,
-                UserExerciseWeekPlan.week_start == week_start,
+                UserExerciseWeekPlan.week_start.in_(sorted(week_starts)),
             )
             .options(selectinload(UserExerciseWeekPlan.exercise))
         )

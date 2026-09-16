@@ -102,9 +102,7 @@ def parse_gf_next(text: str) -> tuple[str, dict[str, Any] | None, bool]:
     """Strip GF_NEXT line from live_set reply.
 
     Returns (clean_text, suggest_or_None, explicit_none).
-    - suggest: {kg, reps, rpe?} when GF_NEXT: kg=… reps=…
-    - explicit_none=True when GF_NEXT: none (clear FSM live_suggest)
-    - if no GF_NEXT line: (text, None, False) — leave FSM unchanged
+    Last matching GF_NEXT line wins.
     """
     if not text:
         return text, None, False
@@ -125,7 +123,6 @@ def parse_gf_next(text: str) -> tuple[str, dict[str, Any] | None, bool]:
             suggest = None
             continue
         if not m or m.group(1) is None:
-            # Unparseable GF_NEXT — still strip from user-visible text
             continue
         kg_s, reps_s, rpe_s = m.group(1), m.group(2), m.group(3)
         try:
@@ -134,7 +131,7 @@ def parse_gf_next(text: str) -> tuple[str, dict[str, Any] | None, bool]:
         except (TypeError, ValueError):
             continue
         suggest = {"kg": kg, "reps": reps}
-        explicit_none = False
+        explicit_none = False  # later numeric overrides earlier none
         if rpe_s is not None:
             try:
                 suggest["rpe"] = int(rpe_s)
@@ -157,20 +154,33 @@ def planned_target_from_fsm(
         return None
     live = data.get("live_suggest")
     if isinstance(live, dict) and live.get("kg") is not None and live.get("reps") is not None:
-        live_set = live.get("for_set")
-        # If tip was bound to a set number, only stamp that set
-        if live_set is None or int(live_set) == int(set_number):
-            out: dict[str, Any] = {
-                "planned_kg": float(live["kg"]),
-                "planned_reps": int(live["reps"]),
-                "plan_source": "live",
-            }
-            if live.get("rpe") is not None:
+        # Reject tip meant for another exercise (late async reply race)
+        tip_ex = live.get("exercise_id")
+        cur_ex = data.get("exercise_id")
+        if tip_ex is not None and cur_ex is not None and int(tip_ex) != int(cur_ex):
+            pass  # fall through to week_plan
+        else:
+            live_set = live.get("for_set")
+            try:
+                set_ok = live_set is not None and int(live_set) == int(set_number)
+            except (TypeError, ValueError):
+                set_ok = False
+            # Require for_set match — unbound tip must not override week_plan for all sets
+            if set_ok:
                 try:
-                    out["planned_rpe"] = int(live["rpe"])
+                    out: dict[str, Any] = {
+                        "planned_kg": float(live["kg"]),
+                        "planned_reps": int(live["reps"]),
+                        "plan_source": "live",
+                    }
+                    if live.get("rpe") is not None:
+                        try:
+                            out["planned_rpe"] = int(live["rpe"])
+                        except (TypeError, ValueError):
+                            pass
+                    return out
                 except (TypeError, ValueError):
                     pass
-            return out
     week_plan = data.get("week_plan")
     if not isinstance(week_plan, dict):
         return None
@@ -506,12 +516,12 @@ async def _upsert_plan(
             if st:
                 st.suggested_weight = kg
             else:
+                # Do not invent working_weight — athlete never lifted this yet
                 session.add(
                     UserExerciseState(
                         user_id=user_id,
                         exercise_id=exercise_id,
                         suggested_weight=kg,
-                        working_weight=kg,
                     )
                 )
 

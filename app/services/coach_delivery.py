@@ -149,26 +149,52 @@ async def run_coach_and_reply(
                     if explicit_none:
                         await fsm_state.update_data(live_suggest=None)
                     elif suggest is not None:
-                        for_set = None
-                        if live and live.get("current_set") is not None:
-                            try:
-                                for_set = int(live["current_set"])
-                            except (TypeError, ValueError):
-                                for_set = None
-                        payload = dict(suggest)
-                        if for_set is not None:
-                            payload["for_set"] = for_set
-                        fsm_updates: dict[str, Any] = {"live_suggest": payload}
-                        # Mirror tip into draft so user doesn't log old weight by inertia
-                        if suggest.get("kg") is not None:
-                            fsm_updates["draft_weight"] = float(suggest["kg"])
-                            fsm_updates["ai_plan_kg"] = float(suggest["kg"])
-                        if suggest.get("reps") is not None:
-                            fsm_updates["ai_plan_reps"] = int(suggest["reps"])
-                            fsm_updates["smart_default_reps"] = int(suggest["reps"])
-                        if suggest.get("rpe") is not None:
-                            fsm_updates["ai_plan_rpe"] = int(suggest["rpe"])
-                        await fsm_state.update_data(**fsm_updates)
+                        cur = await fsm_state.get_data()
+                        live_ex = live.get("exercise_id") if live else focus_exercise_id
+                        live_sid = live.get("session_id") if live else focus_session_id
+                        stale = False
+                        if (
+                            live_ex is not None
+                            and cur.get("exercise_id") is not None
+                            and cur.get("exercise_id") != live_ex
+                        ):
+                            stale = True
+                        if (
+                            live_sid is not None
+                            and cur.get("session_id") is not None
+                            and cur.get("session_id") != live_sid
+                        ):
+                            stale = True
+                        if stale:
+                            logger.info(
+                                "Skip stale live_suggest ex=%s sid=%s fsm_ex=%s fsm_sid=%s",
+                                live_ex,
+                                live_sid,
+                                cur.get("exercise_id"),
+                                cur.get("session_id"),
+                            )
+                        else:
+                            for_set = None
+                            if live and live.get("current_set") is not None:
+                                try:
+                                    for_set = int(live["current_set"])
+                                except (TypeError, ValueError):
+                                    for_set = None
+                            payload = dict(suggest)
+                            if for_set is not None:
+                                payload["for_set"] = for_set
+                            if live_ex is not None:
+                                payload["exercise_id"] = live_ex
+                            fsm_updates: dict[str, Any] = {"live_suggest": payload}
+                            if suggest.get("kg") is not None:
+                                fsm_updates["draft_weight"] = float(suggest["kg"])
+                                fsm_updates["ai_plan_kg"] = float(suggest["kg"])
+                            if suggest.get("reps") is not None:
+                                fsm_updates["ai_plan_reps"] = int(suggest["reps"])
+                                fsm_updates["smart_default_reps"] = int(suggest["reps"])
+                            if suggest.get("rpe") is not None:
+                                fsm_updates["ai_plan_rpe"] = int(suggest["rpe"])
+                            await fsm_state.update_data(**fsm_updates)
                 except Exception:
                     logger.exception("Failed to store live_suggest in FSM")
 
