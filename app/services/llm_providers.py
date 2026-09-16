@@ -195,6 +195,7 @@ async def generate_with_provider(
     user_text: str,
     history: list[dict[str, str]] | None = None,
     max_tokens: int | None = None,
+    model: str | None = None,
 ) -> tuple[str, GeminiResult]:
     """Returns (provider_id_used, result). Never raises."""
     settings = get_settings()
@@ -207,19 +208,21 @@ async def generate_with_provider(
     timeout = settings.nn_timeout_sec
     if tokens > 2000:
         timeout = max(timeout, 120.0)
+    model_id = (model or "").strip() or spec.model
     if spec.kind == "gemini":
         result = await generate_content(
             system=system,
             user_text=user_text,
             history=history,
             max_output_tokens=tokens,
+            model=model_id,
         )
         return pid, result
 
     result = await chat_completions(
         api_key=spec.api_key,
         base_url=spec.base_url,
-        model=spec.model,
+        model=model_id,
         system=system,
         user_text=user_text,
         history=history,

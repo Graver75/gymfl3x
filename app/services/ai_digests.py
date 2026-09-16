@@ -240,6 +240,13 @@ async def send_week_digests(bot: Bot, settings: Settings) -> None:
         except Exception:
             logger.exception("scheduled week_plan failed")
 
+        try:
+            from app.services.program_review import maybe_run_scheduled_program_review
+
+            await maybe_run_scheduled_program_review(bot)
+        except Exception:
+            logger.exception("scheduled program_review failed")
+
         users = list(
             (
                 await session.execute(

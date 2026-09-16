@@ -260,7 +260,14 @@ async def request_coach(
     user_text = await user_prompt_for(kind, athlete_json, focus or {}, locale=locale)
 
     hist = history or []
-    if kind in {"session", "live_set", "session_group", "week_group", "week_plan"}:
+    if kind in {
+        "session",
+        "live_set",
+        "session_group",
+        "week_group",
+        "week_plan",
+        "program_review",
+    }:
         hist = []
     else:
         # Compact long prior tips so they don't re-bloat the prompt
@@ -278,14 +285,22 @@ async def request_coach(
     tokens = max_tokens
     if tokens is None and kind == "week_plan":
         tokens = 4096
+    if tokens is None and kind == "program_review":
+        tokens = 2048
 
-    system = await resolve_system_prompt()
+    from app.services.coach_prompts import resolve_system_prompt_for
+
+    system = await resolve_system_prompt_for(kind)
+    model_override = None
+    if kind == "program_review":
+        model_override = (settings.program_review_model or "").strip() or None
     used_pid, result = await generate_with_provider(
         provider_id=pid,
         system=system,
         user_text=user_text,
         history=hist,
         max_tokens=tokens,
+        model=model_override,
     )
 
     # Log exactly what went to the model (no synthetic re-duplication)

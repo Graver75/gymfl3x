@@ -1620,18 +1620,28 @@ async def adm_hidden_menu(callback: CallbackQuery) -> None:
         await callback.answer("Нет доступа", show_alert=True)
         return
     from app.keyboards import admin_hidden_kb
+    from app.services.program_review import (
+        any_hidden_job_running,
+        load_run_history as load_pr_history,
+    )
     from app.services.week_plan import (
         format_hidden_status_html,
-        is_week_plan_running,
         load_run_history,
     )
 
     async with SessionLocal() as session:
-        hist = await load_run_history(session)
-    running = is_week_plan_running()
+        hist_wp = await load_run_history(session)
+        hist_pr = await load_pr_history(session)
+    merged = sorted(
+        [{**h, "job": h.get("job") or "week_plan"} for h in hist_wp]
+        + [{**h, "job": h.get("job") or "program_review"} for h in hist_pr],
+        key=lambda x: str(x.get("at") or ""),
+        reverse=True,
+    )
+    running = any_hidden_job_running()
     await safe_edit_text(
         callback.message,
-        format_hidden_status_html(history=hist),
+        format_hidden_status_html(history=merged),
         reply_markup=admin_hidden_kb(running=running),
     )
     await callback.answer("Обновлено")
@@ -1645,34 +1655,55 @@ async def adm_hidden_hist(callback: CallbackQuery) -> None:
         await callback.answer("Нет доступа", show_alert=True)
         return
     from app.keyboards import admin_hidden_kb
-    from app.services.week_plan import is_week_plan_running, load_run_history
+    from app.services.program_review import (
+        any_hidden_job_running,
+        load_run_history as load_pr_history,
+    )
+    from app.services.week_plan import load_run_history
 
     async with SessionLocal() as session:
-        hist = await load_run_history(session)
+        hist_wp = await load_run_history(session)
+        hist_pr = await load_pr_history(session)
+    merged = sorted(
+        [{**h, "job": h.get("job") or "week_plan"} for h in hist_wp]
+        + [{**h, "job": h.get("job") or "program_review"} for h in hist_pr],
+        key=lambda x: str(x.get("at") or ""),
+        reverse=True,
+    )
     lines = [ui.b(ui.BTN_ADM_HIDDEN_AI + " · история"), ""]
-    if not hist:
+    if not merged:
         lines.append("<i>Пока пусто — форсни job или дождись воскресного автозапуска.</i>")
     else:
-        for h in hist:
+        for h in merged:
             at = str(h.get("at") or "?")
             if "T" in at:
                 at = at.replace("T", " ").replace("+00:00", "Z")[:19]
             mark = "✓" if h.get("ok") else "✗"
-            err = h.get("error")
+            if h.get("skipped"):
+                mark = "⏭"
+            job = h.get("job") or "?"
+            err = h.get("error") or h.get("reason")
             extra = f" · {ui.esc(err)}" if err else ""
-            lines.append(
-                f"<code>{ui.esc(at)}</code> {mark} <b>{ui.esc(h.get('scope'))}</b>\n"
-                f"  неделя {ui.esc(h.get('week_start') or '—')} · "
-                f"{h.get('ok_athletes', '?')}/{h.get('athletes', '?')} атл. · "
-                f"+{h.get('saved', '?')} упр.{extra}"
-            )
+            if job == "program_review":
+                lines.append(
+                    f"<code>{ui.esc(at)}</code> {mark} <b>программа</b>\n"
+                    f"  {ui.esc(h.get('scope') or '—')} · "
+                    f"fp {ui.esc(h.get('fingerprint') or '—')}{extra}"
+                )
+            else:
+                lines.append(
+                    f"<code>{ui.esc(at)}</code> {mark} <b>{ui.esc(h.get('scope'))}</b>\n"
+                    f"  неделя {ui.esc(h.get('week_start') or '—')} · "
+                    f"{h.get('ok_athletes', '?')}/{h.get('athletes', '?')} атл. · "
+                    f"+{h.get('saved', '?')} упр.{extra}"
+                )
     text = "\n".join(lines)
     if len(text) > 3900:
         text = text[:3890] + "…"
     await safe_edit_text(
         callback.message,
         text,
-        reply_markup=admin_hidden_kb(running=is_week_plan_running()),
+        reply_markup=admin_hidden_kb(running=any_hidden_job_running()),
     )
     await callback.answer()
 
@@ -1685,26 +1716,51 @@ async def adm_hidden_pick(callback: CallbackQuery) -> None:
         await callback.answer("Нет доступа", show_alert=True)
         return
     kind = callback.data.split(":")[-1]
-    from app.keyboards import admin_hidden_week_plan_kb
+    from app.keyboards import admin_hidden_program_review_kb, admin_hidden_week_plan_kb
+    from app.services.program_review import (
+        any_hidden_job_running,
+        get_program_review_run_status,
+        load_stored_advice,
+        load_stored_fingerprint,
+    )
     from app.services.week_plan import (
         HIDDEN_JOBS,
         get_week_plan_run_status,
-        is_week_plan_running,
         target_week_start,
     )
 
     if kind not in HIDDEN_JOBS:
         await callback.answer("?", show_alert=True)
         return
-    running = is_week_plan_running()
-    ws = target_week_start()
+    running = any_hidden_job_running()
     status_line = ""
     if running:
-        run = get_week_plan_run_status() or {}
+        run = get_week_plan_run_status() or get_program_review_run_status() or {}
         status_line = (
             f"\n\n⏳ Сейчас уже выполняется ({ui.esc(run.get('scope'))}). "
             "Новый форс недоступен."
         )
+
+    if kind == "program_review":
+        async with SessionLocal() as session:
+            advice = await load_stored_advice(session)
+            fp = await load_stored_fingerprint(session)
+        preview = (advice or "")[:600]
+        fp_s = (fp or "—")[:16]
+        await safe_edit_text(
+            callback.message,
+            f"Форс: {HIDDEN_JOBS[kind]}\n"
+            f"Общий разбор программы (без данных атлетов).\n"
+            f"Fingerprint: <code>{ui.esc(fp_s)}</code>\n"
+            f"{'Есть сохранённый совет.' if advice else 'Совета ещё нет.'}"
+            f"{status_line}\n\n"
+            + (f"{ui.pre(preview, limit=500)}" if preview else ""),
+            reply_markup=admin_hidden_program_review_kb(running=running),
+        )
+        await callback.answer()
+        return
+
+    ws = target_week_start()
     await safe_edit_text(
         callback.message,
         f"Форс: {HIDDEN_JOBS[kind]}\n"
@@ -1723,7 +1779,7 @@ async def adm_hidden_go(callback: CallbackQuery) -> None:
     if not user:
         await callback.answer("Нет доступа", show_alert=True)
         return
-    # adm:hidden:go:week_plan:all|me
+    # adm:hidden:go:week_plan:all|me  OR  adm:hidden:go:program_review:force
     parts = callback.data.split(":")
     if len(parts) < 5:
         await callback.answer("Битые данные", show_alert=True)
@@ -1731,27 +1787,86 @@ async def adm_hidden_go(callback: CallbackQuery) -> None:
     kind = parts[3]
     scope = parts[4]
     from app.keyboards import admin_hidden_kb, admin_hidden_result_kb
+    from app.services.program_review import (
+        any_hidden_job_running,
+        force_program_review,
+        load_run_history as load_pr_history,
+    )
     from app.services.week_plan import (
         HIDDEN_JOBS,
         force_week_plan,
         format_hidden_status_html,
-        is_week_plan_running,
         load_run_history,
     )
 
-    if kind != "week_plan" or kind not in HIDDEN_JOBS:
+    if kind not in HIDDEN_JOBS:
         await callback.answer("?", show_alert=True)
         return
-    if is_week_plan_running():
-        await callback.answer("Уже выполняется — подожди", show_alert=True)
+
+    async def _merged_hist() -> list:
         async with SessionLocal() as session:
-            hist = await load_run_history(session)
+            hist_wp = await load_run_history(session)
+            hist_pr = await load_pr_history(session)
+        return sorted(
+            [{**h, "job": h.get("job") or "week_plan"} for h in hist_wp]
+            + [{**h, "job": h.get("job") or "program_review"} for h in hist_pr],
+            key=lambda x: str(x.get("at") or ""),
+            reverse=True,
+        )
+
+    if any_hidden_job_running():
+        await callback.answer("Уже выполняется — подожди", show_alert=True)
         await safe_edit_text(
             callback.message,
-            format_hidden_status_html(history=hist),
+            format_hidden_status_html(history=await _merged_hist()),
             reply_markup=admin_hidden_kb(running=True),
         )
         return
+
+    if kind == "program_review":
+        await callback.answer("Разбираю программу… смотри личку")
+        waiting = await callback.message.answer(
+            f"{ui.ICO_NN} Скрытый job «Разбор программы» запущен…\n"
+            "Результат придёт сюда и в личку."
+        )
+        try:
+            await safe_edit_text(
+                callback.message,
+                format_hidden_status_html(history=await _merged_hist()),
+                reply_markup=admin_hidden_kb(running=True),
+            )
+        except Exception:
+            pass
+        report: dict = {}
+        try:
+            status, report = await force_program_review(
+                callback.bot,
+                admin_telegram_id=callback.from_user.id,
+            )
+        except Exception as exc:
+            status = f"Ошибка: {exc}"[:300]
+            report = {}
+        text = f"{ui.BTN_ADM_HIDDEN_AI}\n\n{status}"
+        advice = (report.get("advice") or "")[:1500]
+        if advice:
+            text += f"\n\n{ui.b('Совет ИИ')}\n{ui.esc(advice)}"
+        if len(text) > 4000:
+            text = text[:3990] + "…"
+        kb = admin_hidden_kb(running=False)
+        try:
+            await waiting.edit_text(text, reply_markup=kb)
+        except Exception:
+            await callback.message.answer(text, reply_markup=kb)
+        try:
+            await safe_edit_text(callback.message, text, reply_markup=kb)
+        except Exception:
+            pass
+        return
+
+    if kind != "week_plan":
+        await callback.answer("?", show_alert=True)
+        return
+
     only_id = user.id if scope == "me" else None
     await callback.answer("Считаю план… смотри личку")
     waiting = await callback.message.answer(
@@ -1759,7 +1874,6 @@ async def adm_hidden_go(callback: CallbackQuery) -> None:
         f"({'только ты' if scope == 'me' else 'все атлеты'})…\n"
         "Результат придёт сюда и в личку."
     )
-    # Refresh menu to show running
     async with SessionLocal() as session:
         hist = await load_run_history(session)
     try:
@@ -1770,7 +1884,7 @@ async def adm_hidden_go(callback: CallbackQuery) -> None:
         )
     except Exception:
         pass
-    report: dict = {}
+    report = {}
     try:
         status, report = await force_week_plan(
             callback.bot,
@@ -2459,6 +2573,10 @@ async def adm_nn_prompt_view(callback: CallbackQuery) -> None:
     async with SessionLocal() as session:
         if key == "prompt_system_bender":
             body = await resolve_system_prompt(session)
+        elif key == "prompt_system_program_review":
+            from app.services.coach_prompts import resolve_system_prompt_for
+
+            body = await resolve_system_prompt_for("program_review", session)
         elif key.startswith("prompt_task_"):
             kind = key[len("prompt_task_") :]
             body = await resolve_task_prompt(kind, session)

@@ -737,6 +737,32 @@ def admin_hidden_week_plan_kb(*, running: bool = False) -> InlineKeyboardMarkup:
     )
 
 
+def admin_hidden_program_review_kb(*, running: bool = False) -> InlineKeyboardMarkup:
+    if running:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="⏳ Уже выполняется — обновить",
+                        callback_data="adm:hidden",
+                    )
+                ],
+                [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:hidden")],
+            ]
+        )
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="▶ Запустить разбор (force)",
+                    callback_data="adm:hidden:go:program_review:force",
+                )
+            ],
+            [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:hidden")],
+        ]
+    )
+
+
 def admin_hidden_result_kb(report: dict | None) -> InlineKeyboardMarkup:
     """After force: expand raw preview per athlete."""
     rows: list[list[InlineKeyboardButton]] = []

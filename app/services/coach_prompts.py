@@ -12,6 +12,7 @@ from app.db.session import SessionLocal
 # --- Seed defaults (AppSetting overrides if present) ---
 
 SETTING_SYSTEM = "prompt_system_bender"
+SETTING_SYSTEM_PROGRAM_REVIEW = "prompt_system_program_review"
 SETTING_PREFIX = "prompt_task_"
 
 SYSTEM_PROMPT = """Ты — Бендер: жёсткий, язвительный, но по делу русскоязычный тренер из качалки.
@@ -28,6 +29,15 @@ SYSTEM_PROMPT = """Ты — Бендер: жёсткий, язвительный
 Если данных мало — скажи прямо и всё равно оцени то, что есть.
 Не используй HTML/Markdown-разметку.
 Чужие данные не выдумывай. Для live_set приоритет у актуального JSON."""
+
+SYSTEM_PROGRAM_REVIEW = """Ты — опытный русскоязычный фитнес-тренер и методист силовых программ.
+Задача: оценить ТОЛЬКО структуру общей программы зала (график + шаблоны + упражнения).
+Индивидуальных данных атлетов НЕТ и не будет — не выдумывай прогресс, веса, стаж, пол, возраст.
+Опирайся строго на JSON: schedule, templates[].exercises (порядок position, sets/reps, machine_name).
+Оценивай: покрытие мышечных групп за неделю; баланс push/pull/legs и recovery-дней;
+порядок упражнений внутри дня; адекватность target_sets × target_reps; явные пробелы и перекосы.
+Пиши по делу, без сарказма и без HTML/Markdown. Не ставь меддиагнозов.
+Цифры и названия — только из JSON. Объём ответа — компактный текст для карточки Telegram (~800–1200 символов)."""
 
 DATA_SCHEMA_RU = """Компактный JSON (без дублей):
 • user — фаза, лог, вес, рост height_cm, стаж, возраст, пол, код (без уровней силы)
@@ -133,6 +143,18 @@ DEFAULT_TASKS: dict[str, str] = {
         "цифры плана (kg/reps/rpe) можно кратко опереться, без повтора advice.\n"
         "Без уровней силы. 6–8 предложений. Цифры нагрузки только из JSON."
     ),
+    "program_review": (
+        "СКРЫТЫЙ job: оценка ОБЩЕЙ программы зала (не персональный разбор).\n"
+        "В JSON только schedule (пн–вс) и templates с упражнениями "
+        "(position, name, machine_name, target_sets, target_reps_min/max, weight_step).\n"
+        "Структура ответа СТРОГО:\n"
+        "1) Покрытие мышц / баланс недели (что закрыто, чего не хватает).\n"
+        "2) Порядок упражнений в днях (логика крупных→мелких, антагонисты).\n"
+        "3) Объём: сеты×репы — мало/норм/много по ключевым зонам.\n"
+        "4) Риски (перекос, подряд тяжёлые дни, дубли).\n"
+        "5) 2–4 конкретных улучшения (что переставить / добавить / урезать).\n"
+        "Без персональных советов. Без HTML. Уложись в ~800–1200 символов."
+    ),
 }
 
 
@@ -151,6 +173,23 @@ async def resolve_system_prompt(session: AsyncSession | None = None) -> str:
         return await _load(session)
     async with SessionLocal() as s:
         return await _load(s)
+
+
+async def resolve_system_prompt_for(
+    kind: str, session: AsyncSession | None = None
+) -> str:
+    if kind == "program_review":
+        async def _load_pr(s: AsyncSession) -> str:
+            return (
+                (await get_setting_text(s, SETTING_SYSTEM_PROGRAM_REVIEW))
+                or SYSTEM_PROGRAM_REVIEW
+            )
+
+        if session is not None:
+            return await _load_pr(session)
+        async with SessionLocal() as s:
+            return await _load_pr(s)
+    return await resolve_system_prompt(session)
 
 
 async def resolve_task_prompt(kind: str, session: AsyncSession | None = None) -> str:
@@ -191,13 +230,21 @@ async def user_prompt_for(
 
 def list_prompt_catalog() -> list[tuple[str, str, str]]:
     """(key, title, body) for admin viewer — seed defaults."""
-    items = [(SETTING_SYSTEM, "System (Бендер)", SYSTEM_PROMPT)]
+    items = [
+        (SETTING_SYSTEM, "System (Бендер)", SYSTEM_PROMPT),
+        (
+            SETTING_SYSTEM_PROGRAM_REVIEW,
+            "System (разбор программы)",
+            SYSTEM_PROGRAM_REVIEW,
+        ),
+    ]
     titles = {
         "session": "Разбор тренировки (личка)",
         "session_group": "Разбор тренировки (общий чат)",
         "week": "Неделя (личка)",
         "week_group": "Неделя (общий чат)",
         "week_plan": "Скрытый: прогноз недели",
+        "program_review": "Скрытый: разбор программы",
         "month": "Месяц",
         "exercise": "Упражнение",
         "live_set": "Совет по подходу",
@@ -208,9 +255,11 @@ def list_prompt_catalog() -> list[tuple[str, str, str]]:
 
 
 def catalog_kind(key: str) -> str | None:
-    """Map catalog setting key → coach kind, or None for system."""
+    """Map catalog setting key → coach kind, or None for Bender system."""
     if key == SETTING_SYSTEM:
         return None
+    if key == SETTING_SYSTEM_PROGRAM_REVIEW:
+        return "program_review"
     if key.startswith(SETTING_PREFIX):
         return key[len(SETTING_PREFIX) :]
     return None
@@ -259,6 +308,10 @@ _KIND_PAYLOAD_BRIEF: dict[str, str] = {
         "Один атлет · ~45 дн по упражнению + athlete.live: machine_name, "
         "current_set, draft kg/reps, logged_sets, week_plan (advice+sets) "
         "для анти-дубля. Без adherence/aggregates/BW в payload."
+    ),
+    "program_review": (
+        "Только структура программы: schedule пн–вс + templates/exercises "
+        "(порядок, sets/reps, machine). Без user/sessions/прогресса атлетов."
     ),
 }
 
@@ -365,6 +418,16 @@ _KIND_PAYLOAD_FULL: dict[str, str] = {
         "focus + machine_name\n"
         "Нет в live_set: adherence, aggregates, body_weight_series"
     ),
+    "program_review": (
+        "kind=program_review — скрытый разбор программы (общий совет)\n\n"
+        "JSON:\n"
+        "· schedule[]: wd, day, template_id/name/hashtag или rest\n"
+        "· templates[]: id, name, hashtag,\n"
+        "  exercises[]: id, position, name, machine_name,\n"
+        "  target_sets, target_reps_min/max, weight_step\n\n"
+        "System: prompt_system_program_review (не Бендер)\n"
+        "Нет: user, sessions, exercise_state, notes, live, athletes"
+    ),
 }
 
 
@@ -392,6 +455,8 @@ PROMPT_SEED_FLAGS: dict[str, tuple[str, str]] = {
     "week_prompt_year_history_v1": (f"{SETTING_PREFIX}week", "week"),
     "week_group_prompt_year_history_v1": (f"{SETTING_PREFIX}week_group", "week_group"),
     "week_plan_prompt_year_history_v1": (f"{SETTING_PREFIX}week_plan", "week_plan"),
+    "program_review_prompt_v1": (f"{SETTING_PREFIX}program_review", "program_review"),
+    "program_review_system_v1": (SETTING_SYSTEM_PROGRAM_REVIEW, "program_review_system"),
 }
 
 
@@ -401,7 +466,12 @@ async def ensure_prompt_seeds(session: AsyncSession) -> None:
         row = await session.get(AppSetting, flag)
         if row is not None:
             continue
-        body = SYSTEM_PROMPT if kind == "__system__" else DEFAULT_TASKS[kind]
+        if kind == "__system__":
+            body = SYSTEM_PROMPT
+        elif kind == "program_review_system":
+            body = SYSTEM_PROGRAM_REVIEW
+        else:
+            body = DEFAULT_TASKS[kind]
         existing = await session.get(AppSetting, setting_key)
         if existing is None:
             session.add(AppSetting(key=setting_key, value=body))

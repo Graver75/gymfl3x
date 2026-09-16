@@ -70,6 +70,9 @@ async def show_program(message: Message) -> None:
                 select(WorkoutTemplate).options(selectinload(WorkoutTemplate.exercises))
             )
         ).scalars().all()
+        from app.services.program_review import load_stored_advice
+
+        advice_raw = await load_stored_advice(session)
 
     if not templates:
         await message.answer(
@@ -84,6 +87,13 @@ async def show_program(message: Message) -> None:
         tpl = by_day.get(weekday)
         label = ui.b(tpl.name) if tpl else "отдых"
         lines.append(f"• {ui.b(WEEKDAY_NAMES[weekday])}: {label}")
+
+    from app.services.program_review import format_advice_for_program_card
+
+    advice_block = format_advice_for_program_card(advice_raw)
+    if advice_block:
+        lines.append("")
+        lines.append(advice_block)
 
     lines.append("")
     lines.append(f"{ui.b('Шаблоны:')}")

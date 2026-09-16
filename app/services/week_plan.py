@@ -32,6 +32,7 @@ logger = logging.getLogger("gymflex.week_plan")
 
 HIDDEN_JOBS = {
     "week_plan": "Прогноз недели (план kg/reps/RPE)",
+    "program_review": "Разбор программы",
 }
 
 
@@ -184,7 +185,9 @@ async def append_run_history(session: AsyncSession, entry: dict[str, Any]) -> No
 
 def format_hidden_status_html(*, history: list[dict[str, Any]] | None = None) -> str:
     """Status block for admin hidden-AI screen."""
-    run = get_week_plan_run_status()
+    from app.services.program_review import get_program_review_run_status
+
+    run = get_week_plan_run_status() or get_program_review_run_status()
     lines = [ui.b(ui.BTN_ADM_HIDDEN_AI), ""]
     if run:
         started = str(run.get("started_at") or "?")
@@ -197,9 +200,10 @@ def format_hidden_status_html(*, history: list[dict[str, Any]] | None = None) ->
         lines.append("Статус: <b>⚪ не выполняется</b>")
     lines.append("")
     lines.append(
-        "Скрытые job'ы не пишут в чат атлетам — только пишут план в БД.\n"
+        "Скрытые job'ы не пишут в чат атлетам — результат в БД / карточке.\n"
         "После форса полный результат придёт тебе в личку.\n"
-        "Автозапуск: вместе с недельным дайджестом (тот же день/час)."
+        "Автозапуск: вместе с недельным дайджестом (тот же день/час).\n"
+        "Разбор программы — только если fingerprint изменился."
     )
     hist = history or []
     if hist:
@@ -210,14 +214,24 @@ def format_hidden_status_html(*, history: list[dict[str, Any]] | None = None) ->
             if "T" in at:
                 at = at.replace("T", " ")[5:16]
             mark = "✓" if h.get("ok") else "✗"
+            if h.get("skipped"):
+                mark = "⏭"
             scope = h.get("scope") or "?"
-            ok_a = h.get("ok_athletes", "?")
-            n_a = h.get("athletes", "?")
-            saved = h.get("saved", "?")
-            lines.append(
-                f"· <code>{ui.esc(at)}</code> {mark} {ui.esc(scope)} · "
-                f"{ok_a}/{n_a} атл. · +{saved} упр."
-            )
+            job = h.get("job") or "week_plan"
+            if job == "program_review":
+                extra = h.get("reason") or h.get("fingerprint") or ""
+                lines.append(
+                    f"· <code>{ui.esc(at)}</code> {mark} программа · "
+                    f"{ui.esc(scope)} · {ui.esc(str(extra)[:40])}"
+                )
+            else:
+                ok_a = h.get("ok_athletes", "?")
+                n_a = h.get("athletes", "?")
+                saved = h.get("saved", "?")
+                lines.append(
+                    f"· <code>{ui.esc(at)}</code> {mark} {ui.esc(scope)} · "
+                    f"{ok_a}/{n_a} атл. · +{saved} упр."
+                )
     else:
         lines.append("")
         lines.append("<i>История пока пуста.</i>")

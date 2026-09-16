@@ -86,6 +86,7 @@ async def generate_content(
     user_text: str,
     history: list[dict[str, str]] | None = None,
     max_output_tokens: int = 1024,
+    model: str | None = None,
 ) -> GeminiResult:
     """Call Gemini generateContent. Never raises."""
     settings = get_settings()
@@ -93,8 +94,8 @@ async def generate_content(
     if not key:
         return GeminiResult(status="error", error="GEMINI_API_KEY empty")
 
-    model = settings.gemini_model.strip() or "gemini-2.5-flash-lite"
-    url = f"{_BASE}/models/{model}:generateContent"
+    model_id = (model or settings.gemini_model or "").strip() or "gemini-2.5-flash-lite"
+    url = f"{_BASE}/models/{model_id}:generateContent"
 
     contents: list[dict[str, Any]] = []
     for turn in history or []:
