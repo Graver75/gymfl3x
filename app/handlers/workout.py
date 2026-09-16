@@ -2008,7 +2008,7 @@ async def reset_workout_ask(callback: CallbackQuery, state: FSMContext) -> None:
         f"{ui.BTN_RESET_WORKOUT}\n\n"
         "Удалятся все подходы этой сессии. Прогресс станет 0.\n"
         "Шаблон и сама сессия останутся — можно логировать заново.\n"
-        "Автовеса из уже сохранённых упражнений не откатываются.",
+        "Автовеса пересчитаются из оставшихся завершённых тренировок.",
         reply_markup=workout_reset_confirm_kb(),
     )
     await callback.answer()
@@ -2033,12 +2033,29 @@ async def reset_workout_ok(callback: CallbackQuery, state: FSMContext) -> None:
         if not ws or ws.user_id != user.id or ws.status != SessionStatus.active:
             await callback.answer("Сессия не найдена", show_alert=True)
             return
+        from app.services.exercise_state import (
+            exercise_ids_from_sets,
+            rebuild_user_exercise_states,
+        )
+
+        existing_sets = list(
+            (
+                await session.execute(
+                    select(SessionSet).where(SessionSet.session_id == session_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        ex_ids = await exercise_ids_from_sets(existing_sets)
         sets_del = await session.execute(
             delete(SessionSet).where(SessionSet.session_id == session_id)
         )
         notes_del = await session.execute(
             delete(ExerciseNoteLog).where(ExerciseNoteLog.session_id == session_id)
         )
+        await session.flush()
+        await rebuild_user_exercise_states(session, user.id, ex_ids)
         await session.commit()
         deleted_sets = int(sets_del.rowcount or 0)
         deleted_notes = int(notes_del.rowcount or 0)
@@ -2106,23 +2123,33 @@ async def cancel_workout(callback: CallbackQuery, state: FSMContext) -> None:
                 .options(selectinload(WorkoutSession.sets))
             )
             ws = result.scalar_one_or_none()
-            if ws and ws.status == SessionStatus.active and not ws.sets:
-                await session.delete(ws)
-                await session.commit()
-                await log_action(
-                    user.id,
-                    "workout.skip",
-                    detail="отмена пустой сессии",
-                    entity_type="session",
-                    entity_id=int(session_id),
+            if ws and ws.status == SessionStatus.active:
+                # Hard-delete always (empty or with sets) so skipped data cannot
+                # leak into AI notes_timeline / leftover state.
+                from app.services.exercise_state import (
+                    exercise_ids_from_sets,
+                    rebuild_user_exercise_states,
                 )
-            elif ws and ws.status == SessionStatus.active:
-                ws.status = SessionStatus.skipped
+
+                ex_ids = await exercise_ids_from_sets(ws.sets or [])
+                await session.execute(
+                    delete(ExerciseNoteLog).where(
+                        ExerciseNoteLog.session_id == session_id
+                    )
+                )
+                had_sets = bool(ws.sets)
+                await session.delete(ws)
+                await session.flush()
+                await rebuild_user_exercise_states(session, user.id, ex_ids)
                 await session.commit()
                 await log_action(
                     user.id,
                     "workout.skip",
-                    detail="сессия пропущена",
+                    detail=(
+                        "отмена сессии с подходами"
+                        if had_sets
+                        else "отмена пустой сессии"
+                    ),
                     entity_type="session",
                     entity_id=int(session_id),
                 )

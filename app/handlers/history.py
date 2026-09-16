@@ -533,7 +533,13 @@ async def hist_delete_set(callback: CallbackQuery, state: FSMContext) -> None:
         if not ws:
             await callback.answer("Нет доступа", show_alert=True)
             return
+        from app.services.exercise_state import rebuild_user_exercise_states
+
+        ex_id = row.exercise_id
         await session.delete(row)
+        await session.flush()
+        if ex_id is not None:
+            await rebuild_user_exercise_states(session, target_id, [ex_id])
         await session.commit()
     await log_action(
         target_id,
@@ -587,8 +593,14 @@ async def hist_edit_weight_save(message: Message, state: FSMContext) -> None:
         if not row:
             await message.answer("Подход не найден.")
             return
+        from app.services.exercise_state import rebuild_user_exercise_states
+
+        ex_id = row.exercise_id
         row.weight = weight
         row.volume = max(int(row.reps), 1) * weight * max(int(row.sets_count), 1)
+        await session.flush()
+        if ex_id is not None:
+            await rebuild_user_exercise_states(session, target_id, [ex_id])
         await session.commit()
     await log_action(
         target_id,
@@ -628,8 +640,14 @@ async def hist_edit_reps_save(message: Message, state: FSMContext) -> None:
         if not row:
             await message.answer("Подход не найден.")
             return
+        from app.services.exercise_state import rebuild_user_exercise_states
+
+        ex_id = row.exercise_id
         row.reps = reps
         row.volume = max(reps, 1) * float(row.weight) * max(int(row.sets_count), 1)
+        await session.flush()
+        if ex_id is not None:
+            await rebuild_user_exercise_states(session, target_id, [ex_id])
         await session.commit()
     await log_action(
         target_id,

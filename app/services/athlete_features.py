@@ -69,12 +69,14 @@ def _note_for_set(
     exercise_name: str | None,
 ) -> str | None:
     for n in reversed(notes):
+        if getattr(n, "cleared", False):
+            continue
         if session_id is not None and n.session_id == session_id:
             if exercise_id is not None and n.exercise_id == exercise_id:
                 return (n.text or "").strip() or None
             if exercise_name and n.exercise_name == exercise_name:
                 return (n.text or "").strip() or None
-        if exercise_id is not None and n.exercise_id == exercise_id and not n.cleared:
+        if exercise_id is not None and n.exercise_id == exercise_id:
             text = (n.text or "").strip()
             if text:
                 return text
@@ -207,17 +209,42 @@ async def build_athlete_snapshot(
         )
     ).scalars().all()
 
-    notes = (
-        await session.execute(
-            select(ExerciseNoteLog)
-            .where(
-                ExerciseNoteLog.user_id == user_id,
-                ExerciseNoteLog.created_at
-                >= datetime.combine(since, datetime.min.time()).replace(tzinfo=timezone.utc),
+    notes_raw = list(
+        (
+            await session.execute(
+                select(ExerciseNoteLog)
+                .where(
+                    ExerciseNoteLog.user_id == user_id,
+                    ExerciseNoteLog.created_at
+                    >= datetime.combine(since, datetime.min.time()).replace(
+                        tzinfo=timezone.utc
+                    ),
+                )
+                .order_by(ExerciseNoteLog.created_at.asc())
             )
-            .order_by(ExerciseNoteLog.created_at.asc())
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
+    finished_session_ids = set(
+        (
+            await session.execute(
+                select(WorkoutSession.id).where(
+                    WorkoutSession.user_id == user_id,
+                    WorkoutSession.status == SessionStatus.finished,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # AI must not see cleared notes or notes from non-finished sessions
+    notes = [
+        n
+        for n in notes_raw
+        if not bool(n.cleared)
+        and (n.session_id is None or n.session_id in finished_session_ids)
+    ]
 
     states = (
         await session.execute(
@@ -360,7 +387,6 @@ async def build_athlete_snapshot(
                 "exercise_name": n.exercise_name,
                 "session_id": n.session_id,
                 "text": n.text,
-                "cleared": bool(n.cleared),
                 "created_at": _iso(n.created_at),
             }
             for n in notes

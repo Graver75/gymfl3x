@@ -364,6 +364,8 @@ async def build_coach_context(
 
     notes = []
     for n in snap.get("notes_timeline") or []:
+        if n.get("cleared"):
+            continue
         if kind in {"exercise", "live_set"}:
             if focus_exercise_id is not None and n.get("exercise_id") != focus_exercise_id:
                 if not (focus_exercise_name and n.get("exercise_name") == focus_exercise_name):
@@ -375,7 +377,6 @@ async def build_coach_context(
             {
                 "ex": n.get("exercise_name"),
                 "text": _trim_note(n.get("text")),
-                "cleared": n.get("cleared"),
                 "at": n.get("created_at"),
             }
         )

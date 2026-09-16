@@ -64,6 +64,15 @@ async def main() -> None:
         synced_m = await sync_machines_from_archive(session)
         if synced_m:
             logger.info("Machine names reconciled across templates: %s rows", synced_m)
+        from app.services.exercise_state import scrub_skipped_session_orphans
+
+        scrubbed = await scrub_skipped_session_orphans(session)
+        if scrubbed["sessions"] or scrubbed["notes"]:
+            logger.info(
+                "Scrubbed skipped session orphans: sessions=%s notes=%s",
+                scrubbed["sessions"],
+                scrubbed["notes"],
+            )
 
     bot = Bot(
         token=settings.bot_token,

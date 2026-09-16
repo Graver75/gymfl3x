@@ -461,15 +461,23 @@ async def delete_workout_session(
     session_id: int,
 ) -> bool:
     """Delete a finished/active session and NN-related note logs for it."""
+    from app.services.exercise_state import (
+        exercise_ids_from_sets,
+        rebuild_user_exercise_states,
+    )
+
     ws = await get_user_session(session, owner_user_id, session_id)
     if not ws:
         return False
+    ex_ids = await exercise_ids_from_sets(ws.sets or [])
     notes = await session.execute(
         select(ExerciseNoteLog).where(ExerciseNoteLog.session_id == session_id)
     )
     for note in notes.scalars().all():
         await session.delete(note)
     await session.delete(ws)
+    await session.flush()
+    await rebuild_user_exercise_states(session, owner_user_id, ex_ids)
     await session.commit()
     return True
 
