@@ -1,6 +1,6 @@
 from aiogram import Router
 
-from app.handlers import admin, coach, errors, group, history, profile, program, start, workout
+from app.handlers import admin, coach, errors, fallback, group, history, profile, program, start, workout
 
 
 def setup_routers() -> Router:
@@ -14,4 +14,6 @@ def setup_routers() -> Router:
     root.include_router(workout.router)
     root.include_router(admin.router)
     root.include_router(group.router)
+    # Last: restore menu for stray texts from onboarded users
+    root.include_router(fallback.router)
     return root

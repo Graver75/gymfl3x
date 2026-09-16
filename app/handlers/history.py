@@ -19,6 +19,7 @@ from app.keyboards import (
     history_home_kb,
     history_session_detail_kb,
     history_sessions_kb,
+    main_menu,
 )
 from app.services.history import (
     athlete_label,
@@ -35,7 +36,7 @@ from app.services.history import (
 )
 from app.db.models import SessionSet
 from app.services.telegram_safe import safe_callback_answer, safe_edit_text
-from app.services.users import get_or_create_user
+from app.services.users import can_open_admin, get_or_create_user
 from app.states import EditSessionSG
 
 router = Router(name="history")
@@ -106,6 +107,10 @@ async def history_home(message: Message, state: FSMContext) -> None:
         return
     await message.answer(
         _home_text(viewing_other=False, label="ты"),
+        reply_markup=main_menu(show_admin=can_open_admin(user)),
+    )
+    await message.answer(
+        "Выбери раздел:",
         reply_markup=history_home_kb(is_admin=user.is_admin, viewing_other=False),
     )
 

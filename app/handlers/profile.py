@@ -91,6 +91,10 @@ async def show_profile(message: Message, state: FSMContext) -> None:
     await message.answer(
         _profile_text(user, nn_line=nn_line) + "\n\nФаза, пол и детализация лога — кнопки ниже.\n"
         "Вес: /weight · Стаж: /experience",
+        reply_markup=main_menu(show_admin=can_open_admin(user)),
+    )
+    await message.answer(
+        "Настройки профиля:",
         reply_markup=profile_kb(user.phase, log_level, sex=getattr(user, "sex", None)),
     )
 

@@ -14,16 +14,17 @@ from app.config import get_settings
 from app.db.models import ScheduleDay, WorkoutTemplate
 from app.db.session import SessionLocal
 from app.filters import PrivateChat
+from app.keyboards import main_menu
 from app.services.reminders import WEEKDAY_NAMES, get_template_for_weekday
-from app.services.users import get_or_create_user
+from app.services.users import can_open_admin, get_or_create_user
 
 router = Router(name="program")
 router.message.filter(PrivateChat())
 
 
-async def _ensure_onboarded(message: Message) -> bool:
+async def _ensure_onboarded(message: Message):
     if message.from_user is None:
-        return False
+        return None
     async with SessionLocal() as session:
         user = await get_or_create_user(
             session,
@@ -32,8 +33,8 @@ async def _ensure_onboarded(message: Message) -> bool:
         )
         if not user.onboarding_done:
             await message.answer("Сначала /start.")
-            return False
-    return True
+            return None
+        return user
 
 
 def _format_template(template: WorkoutTemplate) -> str:
@@ -52,7 +53,8 @@ def _format_template(template: WorkoutTemplate) -> str:
 @router.message(Command("program"))
 @router.message(F.text == ui.BTN_PROGRAM)
 async def show_program(message: Message) -> None:
-    if not await _ensure_onboarded(message):
+    user = await _ensure_onboarded(message)
+    if not user:
         return
 
     async with SessionLocal() as session:
@@ -70,7 +72,10 @@ async def show_program(message: Message) -> None:
         ).scalars().all()
 
     if not templates:
-        await message.answer(f"Программа ещё не задана. Админ: кнопка «{ui.BTN_ADMIN}».")
+        await message.answer(
+            f"Программа ещё не задана. Админ: кнопка «{ui.BTN_ADMIN}».",
+            reply_markup=main_menu(show_admin=can_open_admin(user)),
+        )
         return
 
     by_day = {s.weekday: s.template for s in schedule}
@@ -86,13 +91,17 @@ async def show_program(message: Message) -> None:
         lines.append("")
         lines.append(_format_template(tpl))
 
-    await message.answer("\n".join(lines))
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=main_menu(show_admin=can_open_admin(user)),
+    )
 
 
 @router.message(Command("today"))
 @router.message(F.text == ui.BTN_TODAY)
 async def show_today(message: Message) -> None:
-    if not await _ensure_onboarded(message):
+    user = await _ensure_onboarded(message)
+    if not user:
         return
 
     settings = get_settings()
@@ -102,10 +111,12 @@ async def show_today(message: Message) -> None:
     async with SessionLocal() as session:
         template = await get_template_for_weekday(session, weekday)
 
+    kb = main_menu(show_admin=can_open_admin(user))
     if not template:
         await message.answer(
             f"{ui.b(ui.BTN_TODAY)} {ui.b(WEEKDAY_NAMES[weekday])} — "
-            "по графику отдых / день не назначен."
+            "по графику отдых / день не назначен.",
+            reply_markup=kb,
         )
         return
 
@@ -113,5 +124,6 @@ async def show_today(message: Message) -> None:
         f"{ui.b(ui.BTN_TODAY)} {ui.b(WEEKDAY_NAMES[weekday])} — {ui.b(template.name)}\n"
         f"#{ui.esc(template.hashtag)}\n\n"
         + _format_template(template)
-        + f"\n\nЖми «{ui.b(ui.BTN_WORKOUT)}», чтобы логировать."
+        + f"\n\nЖми «{ui.b(ui.BTN_WORKOUT)}», чтобы логировать.",
+        reply_markup=kb,
     )

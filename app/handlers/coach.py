@@ -14,6 +14,7 @@ from app.keyboards import (
     coach_exercises_kb,
     coach_menu_kb,
     coach_prompt_kb,
+    main_menu,
 )
 from app.services.coach_delivery import (
     format_nn_status_line,
@@ -23,7 +24,7 @@ from app.services.coach_delivery import (
 from app.services.history import list_user_logged_exercises
 from app.services.nn_client import NnStatus, get_nn_status, status_label
 from app.services.nn_dialog import clear_dialog, dialog_turn_count
-from app.services.users import get_or_create_user
+from app.services.users import can_open_admin, get_or_create_user
 
 router = Router(name="coach")
 router.message.filter(PrivateChat())
@@ -57,13 +58,13 @@ async def _coach_home_text(status: NnStatus, *, turns: int = 0) -> str:
     )
 
 
-async def _user_and_turns(telegram_id: int, full_name: str) -> tuple[int, int] | None:
+async def _user_and_turns(telegram_id: int, full_name: str):
     async with SessionLocal() as session:
         user = await get_or_create_user(session, telegram_id, full_name)
         if not user.onboarding_done:
             return None
         turns = await dialog_turn_count(session, user.id)
-        return user.id, turns
+        return user, turns
 
 
 @router.message(F.text == ui.BTN_COACH)
@@ -77,10 +78,14 @@ async def coach_menu_msg(message: Message, state: FSMContext) -> None:
     if got is None:
         await message.answer("Сначала /start — нужно пройти онбординг.")
         return
-    _user_id, turns = got
+    user, turns = got
     status = await get_nn_status(force=True)
     await message.answer(
         await _coach_home_text(status, turns=turns),
+        reply_markup=main_menu(show_admin=can_open_admin(user)),
+    )
+    await message.answer(
+        "Разбор:",
         reply_markup=coach_menu_kb(online=status == NnStatus.online, turns=turns),
     )
 

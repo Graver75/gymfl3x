@@ -347,7 +347,11 @@ async def start_workout(message: Message, state: FSMContext) -> None:
         else f"{ui.BTN_TODAY} {WEEKDAY_NAMES[weekday]} — в графике выходной."
     )
     await message.answer(
-        f"{hint}\nКак стартуем?",
+        f"{hint}\nМеню внизу всегда доступно.",
+        reply_markup=main_menu(show_admin=can_open_admin(user)),
+    )
+    await message.answer(
+        "Как стартуем?",
         reply_markup=workout_mode_kb(has_today=bool(today_tpl)),
     )
 

@@ -220,6 +220,10 @@ async def admin_home(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer(
         f"{ui.ICO_ADMIN} Админка Gymflex:",
+        reply_markup=main_menu(show_admin=True),
+    )
+    await message.answer(
+        "Разделы админки:",
         reply_markup=admin_menu_kb(full=user.is_admin),
     )
 

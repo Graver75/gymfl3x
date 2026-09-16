@@ -15,7 +15,7 @@ from app.db.session import SessionLocal, init_db
 from app.fsm_storage import SQLiteStorage, sqlite_path_from_database_url
 from app.handlers import setup_routers
 from app.logging_setup import setup_logging
-from app.middlewares import EnsureCallbackAnsweredMiddleware
+from app.middlewares import ClearStateOnMenuMiddleware, EnsureCallbackAnsweredMiddleware
 from app.services.archive import backfill_archive
 from app.services.reminders import send_evening_recaps, send_morning_reminders
 from app.services.strength_levels import (
@@ -62,6 +62,7 @@ async def main() -> None:
     )
     storage = _build_fsm_storage(settings)
     dp = Dispatcher(storage=storage)
+    dp.message.middleware(ClearStateOnMenuMiddleware())
     dp.callback_query.middleware(EnsureCallbackAnsweredMiddleware())
     dp.include_router(setup_routers())
 

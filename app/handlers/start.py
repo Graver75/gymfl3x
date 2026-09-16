@@ -9,6 +9,7 @@ from app import ui_copy as ui
 from app.db.session import SessionLocal
 from app.filters import PrivateChat
 from app.keyboards import main_menu, onboarding_sex_kb, skip_kb
+from app.middlewares.menu_reset import MAIN_MENU_TEXTS
 from app.services.progression import PHASE_LABELS
 from app.services.users import apply_onboarding, can_open_admin, get_or_create_user
 from app.states import OnboardingSG
@@ -16,6 +17,55 @@ from app.states import OnboardingSG
 router = Router(name="start")
 router.message.filter(PrivateChat())
 router.callback_query.filter(PrivateChat())
+
+
+async def _onboarding_done_welcome(message: Message, user) -> None:
+    sex_label = "Ж" if user.sex == "female" else ("М" if user.sex == "male" else "—")
+    text = (
+        f"{ui.ICO_DONE} Готово!\n"
+        f"Пол для уровней: {ui.b(sex_label)}\n"
+        f"Фаза прогрессии: {PHASE_LABELS[user.phase]}\n\n"
+        "• медовый месяц (&lt;6 мес) — быстрее поднимаем вес\n"
+        "• средний (6–18) — умеренно\n"
+        "• плато (&gt;18) — сначала повторы, потом вес\n\n"
+        f"Фазу и пол можно сменить в {ui.BTN_PROFILE}.\n"
+        "Админ задаёт общую программу — она read-only для остальных.\n\n"
+        "Команды: /today /program /profile /admin"
+    )
+    kb = main_menu(show_admin=can_open_admin(user))
+    try:
+        await message.answer(text, reply_markup=kb)
+    except Exception:
+        # Never leave the user without a reply keyboard after onboarding.
+        await message.answer(
+            f"{ui.ICO_DONE} Онбординг сохранён. Меню внизу.",
+            reply_markup=kb,
+        )
+
+
+async def _bail_if_already_onboarded(message: Message, state: FSMContext) -> bool:
+    """If profile is done but FSM still in onboarding — restore menu and stop."""
+    if message.from_user is None:
+        return True
+    async with SessionLocal() as session:
+        user = await get_or_create_user(
+            session,
+            message.from_user.id,
+            message.from_user.full_name or "Athlete",
+        )
+        done = bool(user.onboarding_done)
+        show_admin = can_open_admin(user)
+        name = user.display_name
+    if not done:
+        return False
+    await state.clear()
+    # Menu button will be handled by its own handler after clear; for free text:
+    if (message.text or "") not in MAIN_MENU_TEXTS:
+        await message.answer(
+            f"{ui.ICO_WAVE} {ui.b(name)}, онбординг уже пройден. Меню внизу.",
+            reply_markup=main_menu(show_admin=show_admin),
+        )
+    return True
 
 
 @router.message(CommandStart())
@@ -36,7 +86,8 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
         text = (
             f"{ui.ICO_WAVE} Привет, {ui.b(user.display_name)}!\n"
             f"Код в сводке: {ui.b(user.short_code)}\n"
-            f"Фаза: {ui.b(PHASE_LABELS[user.phase])}"
+            f"Фаза: {ui.b(PHASE_LABELS[user.phase])}\n\n"
+            "Кнопки меню внизу — /start каждый раз не нужен."
         )
         await message.answer(text, reply_markup=main_menu(show_admin=can_open_admin(user)))
         if payload == "workout":
@@ -52,6 +103,8 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
 
 @router.message(OnboardingSG.display_name)
 async def onb_name(message: Message, state: FSMContext) -> None:
+    if await _bail_if_already_onboarded(message, state):
+        return
     name = (message.text or "").strip()
     if len(name) < 1:
         await message.answer("Нужно имя.")
@@ -67,6 +120,8 @@ async def onb_name(message: Message, state: FSMContext) -> None:
 
 @router.message(OnboardingSG.short_code)
 async def onb_code(message: Message, state: FSMContext) -> None:
+    if await _bail_if_already_onboarded(message, state):
+        return
     code = (message.text or "").strip().upper()
     if not (1 <= len(code) <= 4):
         await message.answer("Код 1–4 символа.")
@@ -78,6 +133,8 @@ async def onb_code(message: Message, state: FSMContext) -> None:
 
 @router.message(OnboardingSG.body_weight)
 async def onb_weight(message: Message, state: FSMContext) -> None:
+    if await _bail_if_already_onboarded(message, state):
+        return
     try:
         weight = float((message.text or "").replace(",", "."))
         if not (30 < weight < 300):
@@ -108,6 +165,8 @@ async def onb_skip_height(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(OnboardingSG.height)
 async def onb_height(message: Message, state: FSMContext) -> None:
+    if await _bail_if_already_onboarded(message, state):
+        return
     text = (message.text or "").strip().lower()
     if text in {"-", "skip", "пропустить", "нет"}:
         height = None
@@ -144,6 +203,8 @@ async def onb_sex(callback: CallbackQuery, state: FSMContext) -> None:
 async def onb_experience(message: Message, state: FSMContext) -> None:
     if message.from_user is None:
         return
+    if await _bail_if_already_onboarded(message, state):
+        return
     try:
         months = int((message.text or "").strip())
         if months < 0 or months > 600:
@@ -175,16 +236,4 @@ async def onb_experience(message: Message, state: FSMContext) -> None:
         )
 
     await state.clear()
-    sex_label = "Ж" if user.sex == "female" else "М"
-    await message.answer(
-        f"{ui.ICO_DONE} Готово!\n"
-        f"Пол для уровней: {ui.b(sex_label)}\n"
-        f"Фаза прогрессии: {PHASE_LABELS[user.phase]}\n\n"
-        "• медовый месяц (&lt;6 мес) — быстрее поднимаем вес\n"
-        "• средний (6–18) — умеренно\n"
-        "• плато (&gt;18) — сначала повторы, потом вес\n\n"
-        f"Фазу и пол можно сменить в {ui.BTN_PROFILE}.\n"
-        "Админ задаёт общую программу — она read-only для остальных.\n\n"
-        "Команды: /today /program /profile /admin",
-        reply_markup=main_menu(show_admin=can_open_admin(user)),
-    )
+    await _onboarding_done_welcome(message, user)
