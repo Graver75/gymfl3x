@@ -95,6 +95,7 @@ async def add_exercise_to_template(
     target_reps_min: int,
     target_reps_max: int,
     weight_step: float,
+    machine_name: str | None = None,
 ) -> tuple[TemplateExercise | None, str]:
     tpl = await session.get(WorkoutTemplate, template_id)
     if not tpl:
@@ -111,9 +112,11 @@ async def add_exercise_to_template(
 
     last = max(existing, key=lambda e: e.position) if existing else None
     pos = (last.position + 1) if last else 0
+    machine = (machine_name or "").strip()[:128] or None
     item = TemplateExercise(
         template_id=template_id,
         name=name.strip()[:128],
+        machine_name=machine,
         position=pos,
         target_sets=target_sets,
         target_reps_min=target_reps_min,

@@ -802,6 +802,7 @@ async def workout_live_coach(callback: CallbackQuery, state: FSMContext) -> None
 
         name = exercise.name
         ex_id = getattr(exercise, "id", None) or data.get("exercise_id")
+        machine_name = getattr(exercise, "machine_name", None)
         target = (
             f"{exercise.target_sets}×{exercise.target_reps_min}-{exercise.target_reps_max}"
         )
@@ -849,6 +850,8 @@ async def workout_live_coach(callback: CallbackQuery, state: FSMContext) -> None
         "logged_sets": _live_set_rows(series),
         "saved_sets_in_session": _live_set_rows(db_parts) if logged and db_parts else None,
     }
+    if machine_name:
+        live["machine_name"] = machine_name
     if live["saved_sets_in_session"] is None:
         live.pop("saved_sets_in_session")
 

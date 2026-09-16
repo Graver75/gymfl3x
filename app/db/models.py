@@ -125,6 +125,8 @@ class TemplateExercise(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     template_id: Mapped[int] = mapped_column(ForeignKey("templates.id", ondelete="CASCADE"))
     name: Mapped[str] = mapped_column(String(128))
+    # Equipment / machine label for AI cues (e.g. «Hammer Strength», «канат»)
+    machine_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     position: Mapped[int] = mapped_column(Integer, default=0)
     target_sets: Mapped[int] = mapped_column(Integer, default=3)
     target_reps_min: Mapped[int] = mapped_column(Integer, default=8)

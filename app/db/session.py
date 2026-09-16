@@ -25,6 +25,13 @@ async def _add_missing_columns(conn) -> None:
     if "drop_index" not in cols:
         await conn.execute(text("ALTER TABLE session_sets ADD COLUMN drop_index INTEGER DEFAULT 0"))
 
+    result = await conn.execute(text("PRAGMA table_info(template_exercises)"))
+    te_cols = {row[1] for row in result}
+    if te_cols and "machine_name" not in te_cols:
+        await conn.execute(
+            text("ALTER TABLE template_exercises ADD COLUMN machine_name VARCHAR(128)")
+        )
+
     result = await conn.execute(text("PRAGMA table_info(user_exercise_state)"))
     cols = {row[1] for row in result}
     if "note" not in cols:

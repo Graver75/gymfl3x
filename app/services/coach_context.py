@@ -39,7 +39,7 @@ def _trim_note(text: str | None) -> str | None:
 
 
 def _compact_set(row: dict[str, Any]) -> dict[str, Any]:
-    return {
+    out: dict[str, Any] = {
         "ex": row.get("exercise_name"),
         "n": row.get("set_number"),
         "d": row.get("drop_index"),
@@ -49,6 +49,10 @@ def _compact_set(row: dict[str, Any]) -> dict[str, Any]:
         "rpe": row.get("rpe_1_10"),
         "rest": row.get("rest_sec"),
     }
+    machine = row.get("machine_name")
+    if machine:
+        out["m"] = machine
+    return out
 
 
 def _session_volume(ws: dict[str, Any]) -> float:
@@ -84,7 +88,16 @@ def _compact_session(ws: dict[str, Any], *, full_sets: bool) -> dict[str, Any]:
         by_ex: dict[str, dict[str, Any]] = {}
         for s in sets:
             name = s.get("exercise_name") or "?"
-            slot = by_ex.setdefault(name, {"reps": [], "kg": [], "diff": None, "rpe": []})
+            slot = by_ex.setdefault(
+                name,
+                {
+                    "reps": [],
+                    "kg": [],
+                    "diff": None,
+                    "rpe": [],
+                    "m": s.get("machine_name"),
+                },
+            )
             if s.get("reps") is not None:
                 slot["reps"].append(s["reps"])
             if s.get("weight") is not None:
@@ -93,9 +106,12 @@ def _compact_session(ws: dict[str, Any], *, full_sets: bool) -> dict[str, Any]:
                 slot["diff"] = s["difficulty"]
             if s.get("rpe_1_10") is not None:
                 slot["rpe"].append(s["rpe_1_10"])
+            if s.get("machine_name") and not slot.get("m"):
+                slot["m"] = s["machine_name"]
         out["by_ex"] = [
             {
                 "ex": name,
+                **({"m": vals["m"]} if vals.get("m") else {}),
                 "reps": vals["reps"][-4:],
                 "kg": vals["kg"][-4:],
                 "diff": vals["diff"],
@@ -206,6 +222,7 @@ async def build_coach_context(
             {
                 "ex_id": st.get("exercise_id"),
                 "ex": st.get("exercise_name"),
+                **({"m": st["machine_name"]} if st.get("machine_name") else {}),
                 "ww": st.get("working_weight"),
                 "sw": st.get("suggested_weight"),
                 "last_reps": st.get("last_reps"),
@@ -225,6 +242,19 @@ async def build_coach_context(
         "exercise_id": focus_exercise_id,
         "exercise_name": focus_exercise_name,
     }
+    live_machine = (live or {}).get("machine_name") if live else None
+    if live_machine:
+        focus["machine_name"] = live_machine
+    elif focus_exercise_id is not None:
+        for st in snap.get("exercise_state") or []:
+            if st.get("exercise_id") == focus_exercise_id and st.get("machine_name"):
+                focus["machine_name"] = st["machine_name"]
+                break
+    elif focus_exercise_name:
+        for st in snap.get("exercise_state") or []:
+            if st.get("exercise_name") == focus_exercise_name and st.get("machine_name"):
+                focus["machine_name"] = st["machine_name"]
+                break
 
     from app.services.progression import PHASE_LABELS
     from app.db.models import TrainingPhase

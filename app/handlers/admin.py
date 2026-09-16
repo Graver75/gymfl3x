@@ -179,8 +179,9 @@ def _template_text(tpl: WorkoutTemplate) -> str:
     else:
         lines.append("Нажми упражнение — править, сменить порядок (⬆️⬇️), удалить:")
         for ex in tpl.exercises:
+            machine = f" · {ex.machine_name}" if ex.machine_name else ""
             lines.append(
-                f"{ex.position + 1}. {ex.name} — "
+                f"{ex.position + 1}. {ex.name}{machine} — "
                 f"{ex.target_sets}×{ex.target_reps_min}-{ex.target_reps_max}"
             )
     return "\n".join(lines)
@@ -197,9 +198,11 @@ async def _load_template(session, tpl_id: int) -> WorkoutTemplate | None:
 
 
 def _exercise_text(ex: TemplateExercise, template_name: str) -> str:
+    machine = getattr(ex, "machine_name", None) or "—"
     return (
         f"{ex.name}\n"
         f"Шаблон: {template_name}\n"
+        f"Тренажёр: {machine}\n"
         f"Позиция: {ex.position + 1}\n"
         f"Цель: {ex.target_sets}×{ex.target_reps_min}-{ex.target_reps_max}\n"
         f"Шаг веса: {ex.weight_step:g} кг"
@@ -474,6 +477,24 @@ async def adm_ex_name(message: Message, state: FSMContext) -> None:
         await message.answer("Нужно название.")
         return
     await state.update_data(ex_name=name)
+    await state.set_state(AdminSG.add_exercise_machine)
+    await message.answer(
+        "Название тренажёра / оборудования (для ИИ), например «Hammer Strength» "
+        "или «канат на блоке».\n"
+        "Пропуск: «-» или «нет»"
+    )
+
+
+@router.message(AdminSG.add_exercise_machine)
+async def adm_ex_machine(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if not await _admin_user(message.from_user.id, message.from_user.full_name or "Admin"):
+        return
+    raw = (message.text or "").strip()
+    skip = raw.lower() in {"-", "нет", "no", "skip", "пропуск", "—"}
+    machine = None if skip or not raw else raw[:128]
+    await state.update_data(ex_machine=machine)
     await state.set_state(AdminSG.add_exercise_targets)
     await message.answer(
         "Цели в формате: подходы повторы_мин повторы_макс [шаг_кг]\n"
@@ -505,6 +526,7 @@ async def adm_ex_targets(message: Message, state: FSMContext) -> None:
             target_reps_min=rmin,
             target_reps_max=rmax,
             weight_step=step,
+            machine_name=data.get("ex_machine"),
         )
         if added is None:
             await message.answer(msg)
@@ -518,8 +540,9 @@ async def adm_ex_targets(message: Message, state: FSMContext) -> None:
         return
     lines = [f"Добавлено. {tpl.name}:"]
     for item in tpl.exercises:
+        machine = f" [{item.machine_name}]" if item.machine_name else ""
         lines.append(
-            f"{item.position + 1}. {item.name} — "
+            f"{item.position + 1}. {item.name}{machine} — "
             f"{item.target_sets}×{item.target_reps_min}-{item.target_reps_max}"
         )
     await message.answer("\n".join(lines), reply_markup=template_detail_kb(tpl_id, tpl.exercises))
@@ -639,6 +662,59 @@ async def adm_ex_rename_save(message: Message, state: FSMContext) -> None:
     await state.update_data(ex_back=back)
     await message.answer(
         f"Название обновлено.\n\n{text}",
+        reply_markup=exercise_edit_kb(ex_id, tpl_id, back=back),
+    )
+
+
+@router.callback_query(F.data.startswith("adm:ex:mach:"))
+async def adm_ex_machine_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.data is None or callback.from_user is None or callback.message is None:
+        return
+    if not await _admin_user(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    ex_id = int(callback.data.split(":")[-1])
+    data = await state.get_data()
+    async with SessionLocal() as session:
+        ex = await session.get(TemplateExercise, ex_id)
+        current = (ex.machine_name if ex else None) or "—"
+    await state.set_state(AdminSG.edit_exercise_machine)
+    await state.update_data(exercise_id=ex_id, ex_back=data.get("ex_back"))
+    await callback.message.answer(
+        f"Тренажёр сейчас: {current}\n"
+        "Новое название (для ИИ), или «-» / «нет» чтобы очистить:"
+    )
+    await callback.answer()
+
+
+@router.message(AdminSG.edit_exercise_machine)
+async def adm_ex_machine_save(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if not await _admin_user(message.from_user.id, message.from_user.full_name or "Admin"):
+        return
+    raw = (message.text or "").strip()
+    skip = raw.lower() in {"-", "нет", "no", "skip", "пропуск", "—", ""}
+    machine = None if skip else raw[:128]
+    data = await state.get_data()
+    ex_id = int(data["exercise_id"])
+    async with SessionLocal() as session:
+        ex = await session.get(TemplateExercise, ex_id)
+        if not ex:
+            await state.clear()
+            await message.answer("Упражнение уже удалено.")
+            return
+        ex.machine_name = machine
+        await session.commit()
+        tpl = await session.get(WorkoutTemplate, ex.template_id)
+        tpl_name = tpl.name if tpl else "?"
+        tpl_id = ex.template_id
+        text = _exercise_text(ex, tpl_name)
+    back = _ex_back_from_data(data, tpl_id)
+    await state.clear()
+    await state.update_data(ex_back=back)
+    await message.answer(
+        f"Тренажёр обновлён.\n\n{text}",
         reply_markup=exercise_edit_kb(ex_id, tpl_id, back=back),
     )
 

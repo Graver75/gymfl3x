@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from app.db.models import (
     BodyWeightLog,
     ExerciseNoteLog,
+    SessionSet,
     SessionStatus,
     User,
     UserExerciseState,
@@ -58,7 +59,7 @@ async def build_athlete_snapshot(
             WorkoutSession.status == SessionStatus.finished,
         )
         .options(
-            selectinload(WorkoutSession.sets),
+            selectinload(WorkoutSession.sets).selectinload(SessionSet.exercise),
             selectinload(WorkoutSession.template),
         )
         .order_by(WorkoutSession.session_date.asc(), WorkoutSession.id.asc())
@@ -99,10 +100,12 @@ async def build_athlete_snapshot(
         set_rows: list[dict[str, Any]] = []
         prev_at = None
         for s in ordered:
+            machine = s.exercise.machine_name if s.exercise else None
             set_rows.append(
                 {
                     "exercise_id": s.exercise_id,
                     "exercise_name": s.exercise_name,
+                    "machine_name": machine,
                     "set_number": s.set_number,
                     "drop_index": s.drop_index,
                     "reps": s.reps,
@@ -183,6 +186,7 @@ async def build_athlete_snapshot(
             {
                 "exercise_id": st.exercise_id,
                 "exercise_name": st.exercise.name if st.exercise else None,
+                "machine_name": st.exercise.machine_name if st.exercise else None,
                 "working_weight": st.working_weight,
                 "suggested_weight": st.suggested_weight,
                 "last_reps": st.last_reps,

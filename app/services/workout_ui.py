@@ -18,6 +18,7 @@ class FreeExercise:
     target_reps_min: int = 8
     target_reps_max: int = 12
     weight_step: float = 2.5
+    machine_name: str | None = None
 
 
 def touch_action_iso() -> str:

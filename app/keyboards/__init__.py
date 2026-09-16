@@ -896,6 +896,7 @@ def exercise_edit_kb(
                 InlineKeyboardButton(text="⬇️ Ниже", callback_data=f"adm:ex:dn:{exercise_id}"),
             ],
             [InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"adm:ex:name:{exercise_id}")],
+            [InlineKeyboardButton(text="🏋️ Тренажёр", callback_data=f"adm:ex:mach:{exercise_id}")],
             [InlineKeyboardButton(text="🎯 Цели (подходы/повторы)", callback_data=f"adm:ex:tgt:{exercise_id}")],
             [InlineKeyboardButton(text="↗️ В другой шаблон", callback_data=f"adm:ex:move:{exercise_id}")],
             [InlineKeyboardButton(text="🗑️ Удалить упражнение", callback_data=f"adm:ex:del:{exercise_id}")],
