@@ -340,6 +340,10 @@ class CoachUsageLog(Base):
     duration_sec: Mapped[float] = mapped_column(Float, default=0.0)
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    # Provider billing units (e.g. Tokenn remain_quota delta); 0 if unknown
+    quota_cost: Mapped[int] = mapped_column(Integer, default=0)
+    request_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     quota_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     quota_value: Mapped[str | None] = mapped_column(String(64), nullable=True)

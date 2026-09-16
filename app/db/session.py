@@ -95,6 +95,18 @@ async def _add_missing_columns(conn) -> None:
         await conn.execute(
             text("ALTER TABLE coach_usage_logs ADD COLUMN provider VARCHAR(32)")
         )
+    if usage_cols and "quota_cost" not in usage_cols:
+        await conn.execute(
+            text("ALTER TABLE coach_usage_logs ADD COLUMN quota_cost INTEGER DEFAULT 0")
+        )
+    if usage_cols and "request_text" not in usage_cols:
+        await conn.execute(
+            text("ALTER TABLE coach_usage_logs ADD COLUMN request_text TEXT")
+        )
+    if usage_cols and "response_text" not in usage_cols:
+        await conn.execute(
+            text("ALTER TABLE coach_usage_logs ADD COLUMN response_text TEXT")
+        )
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:

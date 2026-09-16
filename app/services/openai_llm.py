@@ -13,6 +13,33 @@ from app.services.gemini_client import GeminiResult
 logger = logging.getLogger("gymflex.openai_llm")
 
 
+async def fetch_remain_quota(
+    *,
+    api_key: str,
+    base_url: str,
+    timeout: float = 5.0,
+) -> int | None:
+    """Tokenn/NewAPI-style GET /balance → remain_quota. None if unavailable."""
+    key = (api_key or "").strip()
+    base = (base_url or "").rstrip("/")
+    if not key or not base:
+        return None
+    headers = {"Authorization": f"Bearer {key}"}
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.get(f"{base}/balance", headers=headers)
+            if r.status_code != 200:
+                return None
+            body = r.json() if r.content else {}
+            raw = body.get("remain_quota")
+            if raw is None:
+                return None
+            return int(raw)
+    except Exception as exc:
+        logger.debug("remain_quota fetch failed: %s", exc)
+        return None
+
+
 async def ping_openai_compatible(
     *,
     api_key: str,

@@ -265,8 +265,35 @@ async def request_coach(
         history=hist,
     )
 
+    req_payload = user_text
+    if hist:
+        bits = []
+        for turn in hist:
+            role = (turn.get("role") or "user")[:9]
+            content = (turn.get("content") or "").strip()
+            if content:
+                bits.append(f"[{role}] {content}")
+        if bits:
+            req_payload = (
+                "--- dialog ---\n"
+                + "\n".join(bits)
+                + "\n--- prompt ---\n"
+                + user_text
+            )
+    resp_payload = (result.text or "").strip() if result.status == "ok" else None
+    if result.status != "ok" and result.error:
+        resp_payload = f"[error] {result.error}"
+
     try:
         async with SessionLocal() as session:
+            quota_cost = 0
+            if used_pid == "tokenn" and result.status == "ok":
+                try:
+                    from app.services.coach_usage import measure_tokenn_quota_cost
+
+                    quota_cost, _ = await measure_tokenn_quota_cost(session)
+                except Exception:
+                    logger.debug("Tokenn quota cost measure failed", exc_info=True)
             await record_usage(
                 session,
                 status=result.status,
@@ -277,6 +304,9 @@ async def request_coach(
                 duration_sec=result.duration_sec,
                 prompt_tokens=result.prompt_tokens,
                 output_tokens=result.output_tokens,
+                quota_cost=quota_cost,
+                request_text=req_payload,
+                response_text=resp_payload,
                 error=result.error,
                 quota_id=result.quota_id,
                 quota_value=result.quota_value,

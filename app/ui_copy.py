@@ -96,6 +96,7 @@ BTN_ADM_CHATS = "💬 Чаты бота"
 BTN_ADM_LEVELS = "🏅 Уровни силы"
 BTN_ADM_SNAPSHOT = "🧠 Снимок для NN"
 BTN_ADM_NN_LOAD = "📊 Нагрузка NN"
+BTN_ADM_NN_LOGS = "📋 Запросы ИИ"
 
 # Coach / NN
 BTN_COACH_WEEK = "📊 Разбор недели"

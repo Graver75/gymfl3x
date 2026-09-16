@@ -1624,18 +1624,48 @@ def _format_nn_load(data: dict | None) -> str:
             )
         lines.append("")
 
+    rpd_left = data.get("rpd_left")
+    if rpd_left is None and isinstance(rpd_lim, int) and isinstance(day_req, int):
+        rpd_left = max(0, rpd_lim - day_req)
     lines.extend(
         [
             f"Сегодня (PT / soft RPD): {day_req} / {rpd_lim} req"
+            f" · осталось ~{rpd_left}"
             f" · {tok_in} tok in · {tok_out} tok out",
             f"Последняя минута: {rpm} / {rpm_lim} req",
             f"По типам сегодня: {kind_s}",
             f"Ошибки 429 сегодня: {data.get('day_429', 0)}",
             f"Последний 429: {last_429_s}",
             "",
-            "История (последние 15):",
         ]
     )
+
+    remain_quota = data.get("remain_quota")
+    estimates = data.get("estimates") or {}
+    if remain_quota is not None:
+        lines.append(f"Баланс Tokenn: {int(remain_quota):,} quota".replace(",", " "))
+    if estimates:
+        labels = {
+            "live_set": "совет по подходу",
+            "profile": "разбор профиля",
+            "other": "прочее (session…)",
+        }
+        lines.append("Остаток по расчёту (min soft RPD и баланса):")
+        for key in ("live_set", "profile", "other"):
+            est = estimates.get(key) or {}
+            rem = est.get("remaining")
+            avg = est.get("avg")
+            n = est.get("n", 0)
+            unit = est.get("unit") or "quota"
+            fb = " · fallback" if est.get("fallback") else ""
+            rem_s = "—" if rem is None else f"~{rem}"
+            avg_s = f"avg {avg} {unit}" if avg else "avg —"
+            lines.append(
+                f"• {labels[key]}: {rem_s} ({avg_s}, n={n}{fb})"
+            )
+        lines.append("")
+
+    lines.append("История (последние 15):")
     history = data.get("history") or []
     if not history:
         lines.append("• пока пусто")
@@ -1650,10 +1680,12 @@ def _format_nn_load(data: dict | None) -> str:
             else:
                 when = when[-8:] if when else "??:??:??"
             toks = int(h.get("prompt_tokens") or 0) + int(h.get("output_tokens") or 0)
+            qcost = int(h.get("quota_cost") or 0)
+            cost_s = f" · {qcost}q" if qcost > 0 else f" · {toks}tok"
             prov = h.get("provider") or "?"
             line = (
                 f"• {when} [{prov}] {who} — {h.get('kind')} · {h.get('status')} "
-                f"· {h.get('duration_sec', 0)}с · {toks}tok"
+                f"· {h.get('duration_sec', 0)}с{cost_s}"
             )
             if h.get("status") != "ok" and h.get("error"):
                 err = str(h["error"]).replace("\n", " ")[:60]
@@ -1662,7 +1694,7 @@ def _format_nn_load(data: dict | None) -> str:
 
     lines.append("")
     lines.append(
-        "Переключение ниже. Soft-лимиты — учёт бота; у Gemini точный остаток в AI Studio."
+        "Переключение ниже. Soft RPD — лимит бота; Tokenn quota — из /balance."
     )
     text = "\n".join(lines)
     if len(text) > 3900:
@@ -1706,6 +1738,167 @@ async def adm_nn_load(callback: CallbackQuery) -> None:
             await callback.answer("Без изменений")
         else:
             raise
+
+
+_NN_LOG_PAGE = 8
+_NN_CHUNK = 3400
+
+
+def _format_nn_log_card(row: dict) -> str:
+    when = str(row.get("finished_at") or "—")
+    if "T" in when:
+        when = when.replace("T", " ").replace("Z", "")[:19]
+    toks = int(row.get("prompt_tokens") or 0) + int(row.get("output_tokens") or 0)
+    qcost = int(row.get("quota_cost") or 0)
+    who = row.get("user_label") or (
+        f"id={row.get('user_id')}" if row.get("user_id") else "?"
+    )
+    lines = [
+        f"{ui.BTN_ADM_NN_LOGS} · #{row.get('id')}",
+        f"{when} · {row.get('provider') or '?'} · {row.get('kind') or '?'}",
+        f"Статус: {row.get('status')} · {row.get('duration_sec', 0)}с · {who}",
+        f"API tokens: {row.get('prompt_tokens', 0)} in + {row.get('output_tokens', 0)} out"
+        f" = {toks}",
+        f"Tokenn quota: {qcost if qcost else '—'}",
+    ]
+    if row.get("error"):
+        lines.append(f"Ошибка: {str(row['error'])[:200]}")
+    req = row.get("request_text") or ""
+    resp = row.get("response_text") or ""
+    lines.append("")
+    lines.append(f"Отправлено: {len(req)} симв." if req else "Отправлено: нет записи")
+    lines.append(f"Ответ: {len(resp)} симв." if resp else "Ответ: нет записи")
+    lines.append("")
+    lines.append("Кнопки ниже — полный текст (страницами).")
+    return "\n".join(lines)
+
+
+@router.callback_query(F.data.startswith("adm:nnlogs:"))
+async def adm_nn_logs(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    user = await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin")
+    if not user:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    from app.db.session import SessionLocal
+    from app.keyboards import admin_nn_logs_kb
+    from app.services.coach_usage import list_usage_logs
+
+    try:
+        page = int(callback.data.split(":")[-1])
+    except ValueError:
+        page = 0
+    page = max(0, page)
+    async with SessionLocal() as session:
+        items, total = await list_usage_logs(
+            session, offset=page * _NN_LOG_PAGE, limit=_NN_LOG_PAGE
+        )
+    text = (
+        f"{ui.BTN_ADM_NN_LOGS}\n"
+        f"Всего: {total}. Нажми запрос — карточка + текст."
+    )
+    await safe_edit_text(
+        callback.message,
+        text,
+        reply_markup=admin_nn_logs_kb(
+            items, page=page, total=total, page_size=_NN_LOG_PAGE
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:nnlog:"))
+async def adm_nn_log_detail(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    user = await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin")
+    if not user:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    # adm:nnlog:{id}:{page} — not adm:nnlogs / adm:nnlogv
+    parts = callback.data.split(":")
+    if len(parts) < 3 or parts[1] != "nnlog":
+        return
+    try:
+        log_id = int(parts[2])
+        page = int(parts[3]) if len(parts) > 3 else 0
+    except ValueError:
+        await callback.answer("Битый id", show_alert=True)
+        return
+    from app.db.session import SessionLocal
+    from app.keyboards import admin_nn_log_detail_kb
+    from app.services.coach_usage import get_usage_log
+
+    async with SessionLocal() as session:
+        row = await get_usage_log(session, log_id)
+    if not row:
+        await callback.answer("Не найдено", show_alert=True)
+        return
+    await safe_edit_text(
+        callback.message,
+        _format_nn_log_card(row),
+        reply_markup=admin_nn_log_detail_kb(log_id, page),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:nnlogv:"))
+async def adm_nn_log_view(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    user = await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin")
+    if not user:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    # adm:nnlogv:{id}:{req|resp}:{chunk}:{page}
+    parts = callback.data.split(":")
+    if len(parts) < 5:
+        await callback.answer("Битые данные", show_alert=True)
+        return
+    try:
+        log_id = int(parts[2])
+        which = parts[3]
+        chunk = int(parts[4])
+        page = int(parts[5]) if len(parts) > 5 else 0
+    except ValueError:
+        await callback.answer("Битые данные", show_alert=True)
+        return
+    if which not in {"req", "resp"}:
+        await callback.answer("?", show_alert=True)
+        return
+    from app.db.session import SessionLocal
+    from app.keyboards import admin_nn_log_chunk_kb
+    from app.services.coach_usage import get_usage_log
+
+    async with SessionLocal() as session:
+        row = await get_usage_log(session, log_id)
+    if not row:
+        await callback.answer("Не найдено", show_alert=True)
+        return
+    body = row.get("request_text") if which == "req" else row.get("response_text")
+    body = body or "—"
+    title = "📤 Отправлено" if which == "req" else "📥 Ответ"
+    total_chunks = max(1, (len(body) + _NN_CHUNK - 1) // _NN_CHUNK)
+    chunk = max(0, min(chunk, total_chunks - 1))
+    piece = body[chunk * _NN_CHUNK : (chunk + 1) * _NN_CHUNK]
+    header = f"{title} · #{log_id} · {chunk + 1}/{total_chunks}\n\n"
+    text = header + piece
+    if len(text) > 4090:
+        text = text[:4085] + "…"
+    await safe_edit_text(
+        callback.message,
+        text,
+        reply_markup=admin_nn_log_chunk_kb(
+            log_id,
+            which,
+            chunk,
+            page,
+            has_prev=chunk > 0,
+            has_next=chunk + 1 < total_chunks,
+        ),
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("adm:nntoggle:"))

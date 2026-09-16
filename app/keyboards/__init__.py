@@ -534,10 +534,127 @@ def admin_nn_load_kb(
             ]
         )
     rows.append(
+        [
+            InlineKeyboardButton(
+                text=ui.BTN_ADM_NN_LOGS, callback_data="adm:nnlogs:0"
+            )
+        ]
+    )
+    rows.append(
         [InlineKeyboardButton(text="🔄 Обновить / проверить", callback_data="adm:nnload")]
     )
     rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_nn_logs_kb(
+    items: list[dict],
+    *,
+    page: int,
+    total: int,
+    page_size: int = 8,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for h in items:
+        lid = h.get("id")
+        kind = h.get("kind") or "?"
+        status = h.get("status") or "?"
+        when = str(h.get("finished_at") or "")
+        if "T" in when:
+            when = when.split("T", 1)[1].replace("Z", "")[:5]
+        else:
+            when = when[-8:-3] if len(when) >= 8 else "??:??"
+        qcost = int(h.get("quota_cost") or 0)
+        toks = int(h.get("prompt_tokens") or 0) + int(h.get("output_tokens") or 0)
+        cost = f"{qcost}q" if qcost > 0 else f"{toks}t"
+        mark = "✓" if status == "ok" else "!"
+        who = h.get("user_label") or "?"
+        label = f"{mark} #{lid} {when} {kind} {who} {cost}"[:64]
+        rows.append(
+            [InlineKeyboardButton(text=label, callback_data=f"adm:nnlog:{lid}:{page}")]
+        )
+    pages = max(1, (total + page_size - 1) // page_size) if total else 1
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(
+            InlineKeyboardButton(text="‹", callback_data=f"adm:nnlogs:{page - 1}")
+        )
+    if pages > 1:
+        nav.append(
+            InlineKeyboardButton(
+                text=f"{page + 1}/{pages}", callback_data="adm:noop"
+            )
+        )
+    if page + 1 < pages:
+        nav.append(
+            InlineKeyboardButton(text="›", callback_data=f"adm:nnlogs:{page + 1}")
+        )
+    if nav:
+        rows.append(nav)
+    rows.append(
+        [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"adm:nnlogs:{page}")]
+    )
+    rows.append(
+        [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:nnload")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_nn_log_detail_kb(log_id: int, page: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📤 Отправлено",
+                    callback_data=f"adm:nnlogv:{log_id}:req:0:{page}",
+                ),
+                InlineKeyboardButton(
+                    text="📥 Ответ",
+                    callback_data=f"adm:nnlogv:{log_id}:resp:0:{page}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=ui.BTN_BACK, callback_data=f"adm:nnlogs:{page}"
+                )
+            ],
+        ]
+    )
+
+
+def admin_nn_log_chunk_kb(
+    log_id: int, which: str, chunk: int, page: int, *, has_prev: bool, has_next: bool
+) -> InlineKeyboardMarkup:
+    nav: list[InlineKeyboardButton] = []
+    if has_prev:
+        nav.append(
+            InlineKeyboardButton(
+                text="‹",
+                callback_data=f"adm:nnlogv:{log_id}:{which}:{chunk - 1}:{page}",
+            )
+        )
+    nav.append(
+        InlineKeyboardButton(
+            text="Карточка", callback_data=f"adm:nnlog:{log_id}:{page}"
+        )
+    )
+    if has_next:
+        nav.append(
+            InlineKeyboardButton(
+                text="›",
+                callback_data=f"adm:nnlogv:{log_id}:{which}:{chunk + 1}:{page}",
+            )
+        )
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            nav,
+            [
+                InlineKeyboardButton(
+                    text=ui.BTN_BACK, callback_data=f"adm:nnlogs:{page}"
+                )
+            ],
+        ]
+    )
 
 
 def current_exercises_kb(items: list[tuple], *, page: int = 0) -> InlineKeyboardMarkup:
