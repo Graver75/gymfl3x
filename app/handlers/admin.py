@@ -1592,10 +1592,19 @@ def _format_nn_load(data: dict | None) -> str:
         last_429_s = "—"
 
     plabel = data.get("provider_label") or data.get("provider") or "?"
+    manual = data.get("coach_enabled")
+    env_on = data.get("env_nn_enabled", True)
+    if manual is False:
+        switch_line = "ИИ вручную: ВЫКЛ (кнопка ниже)"
+    else:
+        switch_line = "ИИ вручную: ВКЛ"
+    if not env_on:
+        switch_line += " · NN_ENABLED=false в .env"
     lines = [
         f"{ui.BTN_ADM_NN_LOAD}",
         f"Активный: {plabel} · модель: {data.get('model', '?')}",
         f"Статус: {status} · ключ: {key_ok}",
+        switch_line,
         "",
     ]
 
@@ -1683,9 +1692,13 @@ async def adm_nn_load(callback: CallbackQuery) -> None:
     data = await fetch_nn_load()
     text = _format_nn_load(data)
     providers = (data or {}).get("providers") or []
+    coach_on = bool((data or {}).get("coach_enabled", True))
     try:
         await callback.message.edit_text(
-            text, reply_markup=admin_nn_load_kb(providers=providers)
+            text,
+            reply_markup=admin_nn_load_kb(
+                providers=providers, coach_enabled=coach_on
+            ),
         )
         await callback.answer("Обновлено")
     except TelegramBadRequest as exc:
@@ -1693,6 +1706,43 @@ async def adm_nn_load(callback: CallbackQuery) -> None:
             await callback.answer("Без изменений")
         else:
             raise
+
+
+@router.callback_query(F.data.startswith("adm:nntoggle:"))
+async def adm_nn_toggle(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    user = await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin")
+    if not user:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    from app.config import get_settings
+    from app.db.session import SessionLocal
+    from app.keyboards import admin_nn_load_kb
+    from app.services.llm_providers import set_coach_enabled
+    from app.services.nn_client import fetch_nn_load, invalidate_status_cache
+
+    want_on = callback.data.endswith(":1")
+    if want_on and not get_settings().nn_enabled:
+        await callback.answer(
+            "В .env стоит NN_ENABLED=false — сначала включи там",
+            show_alert=True,
+        )
+        return
+    async with SessionLocal() as session:
+        await set_coach_enabled(session, want_on)
+    invalidate_status_cache()
+    data = await fetch_nn_load()
+    text = _format_nn_load(data)
+    providers = (data or {}).get("providers") or []
+    coach_on = bool((data or {}).get("coach_enabled", True))
+    await callback.message.edit_text(
+        text,
+        reply_markup=admin_nn_load_kb(
+            providers=providers, coach_enabled=coach_on
+        ),
+    )
+    await callback.answer("ИИ включён" if want_on else "ИИ выключен")
 
 
 @router.callback_query(F.data.startswith("adm:nnprov:"))
@@ -1732,7 +1782,11 @@ async def adm_nn_set_provider(callback: CallbackQuery) -> None:
     data = await fetch_nn_load()
     text = _format_nn_load(data)
     providers = (data or {}).get("providers") or []
+    coach_on = bool((data or {}).get("coach_enabled", True))
     await callback.message.edit_text(
-        text, reply_markup=admin_nn_load_kb(providers=providers)
+        text,
+        reply_markup=admin_nn_load_kb(
+            providers=providers, coach_enabled=coach_on
+        ),
     )
     await callback.answer(f"Активен: {spec.label}")

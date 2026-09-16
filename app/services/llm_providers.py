@@ -17,6 +17,7 @@ from app.services.openai_llm import chat_completions, ping_openai_compatible
 logger = logging.getLogger("gymflex.llm_providers")
 
 SETTING_PROVIDER = "coach_provider"
+SETTING_ENABLED = "coach_enabled"
 
 # Preset ids used in admin UI and DB
 PROVIDER_GEMINI = "gemini"
@@ -125,6 +126,43 @@ async def set_active_provider(session: AsyncSession, provider_id: str) -> bool:
         row.value = pid
     await session.commit()
     return True
+
+
+def _parse_enabled_value(raw: str | None) -> bool:
+    if raw is None or raw.strip() == "":
+        return True
+    text = raw.strip().lower()
+    if text in {"0", "false", "no", "off", "disabled"}:
+        return False
+    if text in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    return True
+
+
+async def is_coach_enabled(session: AsyncSession | None = None) -> bool:
+    """Env NN_ENABLED AND admin DB toggle (default on)."""
+    settings = get_settings()
+    if not settings.nn_enabled:
+        return False
+
+    async def _from_db(s: AsyncSession) -> bool:
+        row = await s.get(AppSetting, SETTING_ENABLED)
+        return _parse_enabled_value(row.value if row else None)
+
+    if session is not None:
+        return await _from_db(session)
+    async with SessionLocal() as s:
+        return await _from_db(s)
+
+
+async def set_coach_enabled(session: AsyncSession, enabled: bool) -> None:
+    value = "1" if enabled else "0"
+    row = await session.get(AppSetting, SETTING_ENABLED)
+    if row is None:
+        session.add(AppSetting(key=SETTING_ENABLED, value=value))
+    else:
+        row.value = value
+    await session.commit()
 
 
 async def ping_provider(spec: ProviderSpec, *, timeout: float | None = None) -> bool:

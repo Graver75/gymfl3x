@@ -17,6 +17,7 @@ from app.services.llm_providers import (
     generate_with_provider,
     get_active_provider_id,
     get_provider_spec,
+    is_coach_enabled,
     provider_configured,
     providers_status_snapshot,
 )
@@ -78,6 +79,11 @@ async def get_nn_status(*, force: bool = False) -> NnStatus:
     settings = get_settings()
     if not settings.nn_enabled:
         return NnStatus.disabled
+    try:
+        if not await is_coach_enabled():
+            return NnStatus.disabled
+    except Exception:
+        logger.debug("coach_enabled check failed", exc_info=True)
 
     now = time.monotonic()
     if not force and _status_cache and now - _status_cache[0] < _STATUS_TTL_SEC:
@@ -87,6 +93,14 @@ async def get_nn_status(*, force: bool = False) -> NnStatus:
         now = time.monotonic()
         if not force and _status_cache and now - _status_cache[0] < _STATUS_TTL_SEC:
             return _status_cache[1]
+        # Re-check toggle inside lock (admin may have flipped it)
+        try:
+            if not await is_coach_enabled():
+                status = NnStatus.disabled
+                _status_cache = (time.monotonic(), status)
+                return status
+        except Exception:
+            pass
         status = await _resolve_status()
         _status_cache = (time.monotonic(), status)
         return status
@@ -139,12 +153,11 @@ async def fetch_nn_meta(*, force: bool = False) -> dict[str, Any]:
 async def fetch_nn_load() -> dict[str, Any] | None:
     """Admin usage + provider status. Never raises."""
     settings = get_settings()
-    if not settings.nn_enabled:
-        return None
     try:
         async with SessionLocal() as session:
             snap = await usage_snapshot(session)
             active = await get_active_provider_id(session)
+            manual_on = await is_coach_enabled(session)
         providers = await providers_status_snapshot()
         status = await get_nn_status(force=True)
         active_spec = get_provider_spec(active)
@@ -156,6 +169,8 @@ async def fetch_nn_load() -> dict[str, Any] | None:
             active_spec and provider_configured(active_spec)
         )
         snap["providers"] = providers
+        snap["coach_enabled"] = manual_on
+        snap["env_nn_enabled"] = bool(settings.nn_enabled)
         return snap
     except Exception as exc:
         logger.warning("Coach usage snapshot failed: %s", exc)
@@ -176,6 +191,8 @@ async def fetch_nn_load() -> dict[str, Any] | None:
             "history": [],
             "last_429": None,
             "providers": [],
+            "coach_enabled": False,
+            "env_nn_enabled": bool(settings.nn_enabled),
         }
 
 
@@ -192,6 +209,11 @@ async def request_coach(
     """Generate coach text via active LLM provider. Never raises."""
     settings = get_settings()
     if not settings.nn_enabled:
+        return None
+    try:
+        if not await is_coach_enabled():
+            return None
+    except Exception:
         return None
 
     pid = await get_active_provider_id()

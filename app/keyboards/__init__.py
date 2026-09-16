@@ -498,8 +498,26 @@ def admin_level_detail_kb(std_id: int, *, mode: str) -> InlineKeyboardMarkup:
 
 def admin_nn_load_kb(
     providers: list[dict] | None = None,
+    *,
+    coach_enabled: bool = True,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
+    if coach_enabled:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="⏹ Выключить ИИ", callback_data="adm:nntoggle:0"
+                )
+            ]
+        )
+    else:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="▶️ Включить ИИ", callback_data="adm:nntoggle:1"
+                )
+            ]
+        )
     for p in providers or []:
         if not p.get("configured"):
             continue

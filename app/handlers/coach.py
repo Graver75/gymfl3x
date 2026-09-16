@@ -67,7 +67,7 @@ async def _coach_home_text(status: NnStatus, *, turns: int = 0) -> str:
     if status == NnStatus.disabled:
         return (
             f"{ui.BTN_COACH}\n{line}\n{dialog_line}\n\n"
-            "Вызовы к нейросети отключены (NN_ENABLED=false).\n"
+            "Вызовы к нейросети отключены (админка или NN_ENABLED=false).\n"
             "Логирование тренировок работает как обычно."
             f"{profile_note}"
         )
