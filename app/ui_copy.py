@@ -189,17 +189,48 @@ ICO_FIRE = "🔥"
 ICO_RECAP = "📝"
 
 
-def format_user_date(value: date | datetime | str) -> str:
-    """User-facing dates as dd.mm.yyyy."""
-    if isinstance(value, datetime):
-        value = value.date()
-    elif isinstance(value, str):
-        raw = value.strip()
-        if "T" in raw:
-            value = datetime.fromisoformat(raw).date()
-        else:
-            value = date.fromisoformat(raw)
-    return value.strftime("%d.%m.%Y")
+def format_user_date(value: date | datetime | str | None) -> str:
+    """User-facing dates as dd.mm.YYYY."""
+    if value is None:
+        return "—"
+    try:
+        if isinstance(value, datetime):
+            value = value.date()
+        elif isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return "—"
+            if raw.endswith("Z"):
+                raw = raw[:-1] + "+00:00"
+            if "T" in raw:
+                value = datetime.fromisoformat(raw).date()
+            else:
+                # Already dd.mm.YYYY?
+                if len(raw) == 10 and raw[2] == "." and raw[5] == ".":
+                    return raw
+                value = date.fromisoformat(raw)
+        return value.strftime("%d.%m.%Y")
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def format_user_datetime(value: datetime | str | None) -> str:
+    """User-facing date+time as dd.mm.YYYY HH:MM."""
+    if value is None:
+        return "—"
+    try:
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return "—"
+            if raw.endswith("Z"):
+                raw = raw[:-1] + "+00:00"
+            value = datetime.fromisoformat(raw)
+        if value.tzinfo is not None:
+            value = value.astimezone()
+        return value.strftime("%d.%m.%Y %H:%M")
+    except (TypeError, ValueError):
+        return str(value)
 
 
 def label_target(text: str) -> str:

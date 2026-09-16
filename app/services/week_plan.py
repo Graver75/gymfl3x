@@ -451,7 +451,7 @@ def format_plan_card_html(plan: UserExerciseWeekPlan) -> str:
 
     sets = parse_sets_json(plan.sets_json)
     lines = [
-        f"<b>План ИИ</b> · неделя с {html_mod.escape(plan.week_start.isoformat())}"
+        f"<b>План ИИ</b> · неделя с {html_mod.escape(ui.format_user_date(plan.week_start))}"
     ]
     for s in sets:
         rpe = s.get("rpe")
@@ -742,13 +742,14 @@ async def run_week_plan_batch(
 
 
 def format_batch_summary(report: dict[str, Any], *, max_preview: int = 800) -> str:
+    week_label = ui.format_user_date(report.get("week_start"))
     if report.get("error") == "nn_offline":
         return "ИИ офлайн — week_plan не запущен"
     if report.get("error") == "no_exercises":
-        return f"Нет упражнений в расписании на неделю {report.get('week_start')}"
+        return f"Нет упражнений в расписании на неделю {week_label}"
 
     lines = [
-        f"Прогноз недели · week_start={report.get('week_start')}",
+        f"Прогноз недели · с {week_label}",
         f"Атлетов: {report.get('ok_athletes', 0)}/{report.get('athletes', 0)} ок",
         f"Упражнений записано: {report.get('exercises_saved', 0)} "
         f"(целевых в шаблонах: {report.get('target_exercise_n', 0)})",
@@ -864,9 +865,9 @@ async def format_saved_plans_detail(
         q = q.where(UserExerciseWeekPlan.user_id.in_(user_ids))
     rows = list((await session.execute(q)).all())
     if not rows:
-        return f"В БД нет планов на неделю с {week_start.isoformat()}."
+        return f"В БД нет планов на неделю с {ui.format_user_date(week_start)}."
 
-    lines = [f"Результат планов · неделя с {week_start.isoformat()}", ""]
+    lines = [f"Результат планов · неделя с {ui.format_user_date(week_start)}", ""]
     current_code: str | None = None
     for plan, user, ex in rows:
         code = user.short_code or str(user.id)

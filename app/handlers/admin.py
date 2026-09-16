@@ -1675,9 +1675,7 @@ async def adm_hidden_hist(callback: CallbackQuery) -> None:
         lines.append("<i>Пока пусто — форсни job или дождись воскресного автозапуска.</i>")
     else:
         for h in merged:
-            at = str(h.get("at") or "?")
-            if "T" in at:
-                at = at.replace("T", " ").replace("+00:00", "Z")[:19]
+            at = ui.format_user_datetime(h.get("at"))
             mark = "✓" if h.get("ok") else "✗"
             if h.get("skipped"):
                 mark = "⏭"
@@ -1693,7 +1691,7 @@ async def adm_hidden_hist(callback: CallbackQuery) -> None:
             else:
                 lines.append(
                     f"<code>{ui.esc(at)}</code> {mark} <b>{ui.esc(h.get('scope'))}</b>\n"
-                    f"  неделя {ui.esc(h.get('week_start') or '—')} · "
+                    f"  неделя {ui.esc(ui.format_user_date(h.get('week_start')))} · "
                     f"{h.get('ok_athletes', '?')}/{h.get('athletes', '?')} атл. · "
                     f"+{h.get('saved', '?')} упр.{extra}"
                 )
@@ -1764,7 +1762,7 @@ async def adm_hidden_pick(callback: CallbackQuery) -> None:
     await safe_edit_text(
         callback.message,
         f"Форс: {HIDDEN_JOBS[kind]}\n"
-        f"Целевая неделя с {ws.isoformat()} (пн).\n"
+        f"Целевая неделя с {ui.format_user_date(ws)} (пн).\n"
         f"Кому прогнать?{status_line}",
         reply_markup=admin_hidden_week_plan_kb(running=running),
     )
@@ -2389,11 +2387,7 @@ def _format_nn_load(data: dict | None) -> str:
             who = h.get("user_label") or (
                 f"id={h.get('user_id')}" if h.get("user_id") else "?"
             )
-            when = str(h.get("finished_at") or "")
-            if "T" in when:
-                when = when.split("T", 1)[1].replace("Z", "")[:8]
-            else:
-                when = when[-8:] if when else "??:??:??"
+            when = ui.format_user_datetime(h.get("finished_at"))
             toks = int(h.get("prompt_tokens") or 0) + int(h.get("output_tokens") or 0)
             qcost = int(h.get("quota_cost") or 0)
             cost_s = f"{_nn_num(qcost)}q" if qcost > 0 else f"{_nn_num(toks)}tok"
@@ -2602,9 +2596,7 @@ async def adm_nn_prompt_view(callback: CallbackQuery) -> None:
 
 
 def _format_nn_log_card(row: dict) -> str:
-    when = str(row.get("finished_at") or "—")
-    if "T" in when:
-        when = when.replace("T", " ").replace("Z", "")[:19]
+    when = ui.format_user_datetime(row.get("finished_at"))
     toks = int(row.get("prompt_tokens") or 0) + int(row.get("output_tokens") or 0)
     qcost = int(row.get("quota_cost") or 0)
     who = row.get("user_label") or (
