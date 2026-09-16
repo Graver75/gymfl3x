@@ -2036,16 +2036,30 @@ async def adm_snapshot(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+def _nn_num(n: object) -> str:
+    try:
+        return f"{int(n):,}".replace(",", " ")
+    except (TypeError, ValueError):
+        return str(n)
+
+
 def _format_nn_load(data: dict | None) -> str:
     if not data:
         return (
-            f"{ui.BTN_ADM_NN_LOAD}\n"
+            f"{ui.b(ui.BTN_ADM_NN_LOAD)}\n\n"
             "Коуч недоступен (выключен / нет ключа / ошибка).\n"
             "Запросы пользователей не принимаются."
         )
 
-    status = data.get("status") or "?"
-    key_ok = "да" if data.get("key_configured") else "нет"
+    status = str(data.get("status") or "?")
+    status_l = status.lower()
+    if status_l == "online":
+        status_mark = "🟢"
+    elif status_l in {"offline", "error", "down"}:
+        status_mark = "🔴"
+    else:
+        status_mark = "🟡"
+    key_ok = "ключ ✓" if data.get("key_configured") else "ключ ✗"
     rpd_lim = data.get("rpd_limit", "?")
     rpm_lim = data.get("rpm_limit", "?")
     day_req = data.get("day_req", 0)
@@ -2053,7 +2067,6 @@ def _format_nn_load(data: dict | None) -> str:
     tok_in = data.get("day_tok_in", 0)
     tok_out = data.get("day_tok_out", 0)
     by_kind = data.get("by_kind") or {}
-    kind_s = " · ".join(f"{k}={v}" for k, v in sorted(by_kind.items())) or "—"
     last_429 = data.get("last_429")
     if last_429:
         q = last_429.get("quota_id") or "?"
@@ -2063,100 +2076,119 @@ def _format_nn_load(data: dict | None) -> str:
         last_429_s = "—"
 
     plabel = data.get("provider_label") or data.get("provider") or "?"
+    model = data.get("model") or "?"
     manual = data.get("coach_enabled")
     env_on = data.get("env_nn_enabled", True)
     if manual is False:
-        switch_line = "ИИ вручную: ВЫКЛ (кнопка ниже)"
+        switch_s = "ИИ <b>ВЫКЛ</b>"
     else:
-        switch_line = "ИИ вручную: ВКЛ"
+        switch_s = "ИИ <b>ВКЛ</b>"
     if not env_on:
-        switch_line += " · NN_ENABLED=false в .env"
+        switch_s += " · <code>NN_ENABLED=false</code>"
+
     lines = [
-        f"{ui.BTN_ADM_NN_LOAD}",
-        f"Активный: {plabel} · модель: {data.get('model', '?')}",
-        f"Статус: {status} · ключ: {key_ok}",
-        switch_line,
+        f"{ui.b(ui.BTN_ADM_NN_LOAD)}",
         "",
+        f"{ui.b(plabel)} · <code>{ui.esc(model)}</code>",
+        f"{status_mark} {ui.esc(status)} · {key_ok} · {switch_s}",
     ]
 
     providers = data.get("providers") or []
     if providers:
-        lines.append("Провайдеры:")
+        lines.append("")
+        lines.append(ui.b("Провайдеры"))
         for p in providers:
-            mark = "●" if p.get("active") else "○"
+            active = bool(p.get("active"))
+            mark = "▸" if active else "·"
+            label = ui.esc(p.get("label") or "?")
+            pmodel = ui.esc(p.get("model") or "?")
             if not p.get("configured"):
                 st = "нет ключа"
             elif p.get("online"):
                 st = "online"
             else:
                 st = "offline"
-            lines.append(
-                f"{mark} {p.get('label')} ({p.get('model')}) — {st}"
-            )
-        lines.append("")
+            name = f"<b>{label}</b>" if active else label
+            lines.append(f"{mark} {name} · <code>{pmodel}</code> — {st}")
 
     rpd_left = data.get("rpd_left")
     if rpd_left is None and isinstance(rpd_lim, int) and isinstance(day_req, int):
         rpd_left = max(0, rpd_lim - day_req)
-    lines.extend(
-        [
-            f"Сегодня (PT / soft RPD): {day_req} / {rpd_lim} req"
-            f" · осталось ~{rpd_left}"
-            f" · {tok_in} tok in · {tok_out} tok out",
-            f"Последняя минута: {rpm} / {rpm_lim} req",
-            f"По типам сегодня: {kind_s}",
-            f"Ошибки 429 сегодня: {data.get('day_429', 0)}",
-            f"Последний 429: {last_429_s}",
-            "",
-        ]
+    day_429 = int(data.get("day_429") or 0)
+    lines.append("")
+    lines.append(ui.b("Сегодня"))
+    lines.append(
+        f"req  <code>{_nn_num(day_req)}</code> / <code>{_nn_num(rpd_lim)}</code>"
+        f"  · осталось ~<code>{_nn_num(rpd_left)}</code>"
     )
+    lines.append(
+        f"tok  <code>{_nn_num(tok_in)}</code> in → <code>{_nn_num(tok_out)}</code> out"
+    )
+    lines.append(f"rpm  <code>{rpm}</code> / <code>{rpm_lim}</code>")
+    if by_kind:
+        kind_bits = " · ".join(
+            f"<code>{ui.esc(k)}</code> {_nn_num(v)}" for k, v in sorted(by_kind.items())
+        )
+        lines.append(f"типы {kind_bits}")
+    else:
+        lines.append("типы —")
+    if day_429:
+        lines.append(
+            f"429  <b>{day_429}</b> · последний <code>{ui.esc(last_429_s)}</code>"
+        )
+    else:
+        lines.append("429  0")
 
     sched = data.get("digest_schedule") or {}
     if sched:
-        lines.append("Расписания ИИ:")
+        lines.append("")
+        lines.append(ui.b("Расписание"))
         lines.append(
-            f"· сводка+session_group: ~{sched.get('recap_hour', '?')}:00"
+            f"сводка+session_group · ~{sched.get('recap_hour', '?')}:00"
         )
         lines.append(
-            f"· week/week_group: {sched.get('week_digest_weekday_name', '?')} "
+            f"week/week_group · {ui.esc(sched.get('week_digest_weekday_name', '?'))} "
             f"~{sched.get('week_digest_hour', '?')}:00"
         )
         soon = sched.get("coming_soon") or []
         if soon:
-            lines.append(f"· скоро: {', '.join(soon)}")
-        lines.append("")
+            lines.append(f"скоро · {ui.esc(', '.join(str(x) for x in soon))}")
 
     remain_quota = data.get("remain_quota")
     estimates = data.get("estimates") or {}
-    if remain_quota is not None:
-        lines.append(f"Баланс Tokenn: {int(remain_quota):,} quota".replace(",", " "))
-    if estimates:
-        labels = {
-            "live_set": "совет по подходу",
-            "profile": "разбор профиля/неделя",
-            "other": "прочее (session…)",
-        }
-        lines.append("Остаток по расчёту (min soft RPD и баланса):")
-        for key in ("live_set", "profile", "other"):
-            est = estimates.get(key) or {}
-            rem = est.get("remaining")
-            avg = est.get("avg")
-            n = est.get("n", 0)
-            unit = est.get("unit") or "quota"
-            fb = " · fallback" if est.get("fallback") else ""
-            rem_s = "—" if rem is None else f"~{rem}"
-            avg_s = f"avg {avg} {unit}" if avg else "avg —"
-            lines.append(
-                f"• {labels[key]}: {rem_s} ({avg_s}, n={n}{fb})"
-            )
+    if remain_quota is not None or estimates:
         lines.append("")
+        lines.append(ui.b("Баланс Tokenn"))
+        if remain_quota is not None:
+            lines.append(f"<code>{_nn_num(remain_quota)}</code> quota")
+        if estimates:
+            labels = {
+                "live_set": "совет подхода",
+                "profile": "профиль / неделя",
+                "other": "прочее",
+            }
+            lines.append("<i>остаток = min(soft RPD, баланс)</i>")
+            for key in ("live_set", "profile", "other"):
+                est = estimates.get(key) or {}
+                rem = est.get("remaining")
+                avg = est.get("avg")
+                n = est.get("n", 0)
+                unit = est.get("unit") or "quota"
+                fb = " fallback" if est.get("fallback") else ""
+                rem_s = "—" if rem is None else f"~{_nn_num(rem)}"
+                avg_s = f"avg {_nn_num(avg)} {unit}" if avg else "avg —"
+                lines.append(
+                    f"· {labels[key]} · <b>{rem_s}</b>"
+                    f"  <code>{avg_s}, n={n}{fb}</code>"
+                )
 
-    lines.append("История (последние 15):")
+    lines.append("")
+    lines.append(ui.b("История"))
     history = data.get("history") or []
     if not history:
-        lines.append("• пока пусто")
+        lines.append("<i>пока пусто</i>")
     else:
-        for h in history[:15]:
+        for h in history[:12]:
             who = h.get("user_label") or (
                 f"id={h.get('user_id')}" if h.get("user_id") else "?"
             )
@@ -2167,20 +2199,25 @@ def _format_nn_load(data: dict | None) -> str:
                 when = when[-8:] if when else "??:??:??"
             toks = int(h.get("prompt_tokens") or 0) + int(h.get("output_tokens") or 0)
             qcost = int(h.get("quota_cost") or 0)
-            cost_s = f" · {qcost}q" if qcost > 0 else f" · {toks}tok"
+            cost_s = f"{_nn_num(qcost)}q" if qcost > 0 else f"{_nn_num(toks)}tok"
             prov = h.get("provider") or "?"
-            line = (
-                f"• {when} [{prov}] {who} — {h.get('kind')} · {h.get('status')} "
-                f"· {h.get('duration_sec', 0)}с{cost_s}"
+            kind = h.get("kind") or "?"
+            st = str(h.get("status") or "?")
+            dur = h.get("duration_sec", 0)
+            ok = st == "ok"
+            st_s = "ok" if ok else f"<b>{ui.esc(st)}</b>"
+            lines.append(
+                f"<code>{ui.esc(when)}</code> [{ui.esc(prov)}] "
+                f"{ui.esc(who)} · <code>{ui.esc(kind)}</code> · {st_s} · "
+                f"{ui.esc(dur)}с · {ui.esc(cost_s)}"
             )
-            if h.get("status") != "ok" and h.get("error"):
-                err = str(h["error"]).replace("\n", " ")[:60]
-                line += f"\n  ↳ {err}"
-            lines.append(line)
+            if not ok and h.get("error"):
+                err = str(h["error"]).replace("\n", " ")[:72]
+                lines.append(f"   ↳ <i>{ui.esc(err)}</i>")
 
     lines.append("")
     lines.append(
-        "Переключение ниже. Soft RPD — лимит бота; Tokenn quota — из /balance."
+        "<i>Кнопки ниже. Soft RPD — лимит бота · Tokenn quota — /balance.</i>"
     )
     text = "\n".join(lines)
     if len(text) > 3900:

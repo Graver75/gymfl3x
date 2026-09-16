@@ -154,14 +154,23 @@ async def exercises_for_week(
     return sorted(by_id.values(), key=lambda e: (e.template_id, e.position, e.id))
 
 
-def _target_exercises_payload(exercises: list[TemplateExercise]) -> list[dict[str, Any]]:
+def _target_exercises_payload(
+    exercises: list[TemplateExercise],
+    *,
+    machines: dict[str, str | None] | None = None,
+) -> list[dict[str, Any]]:
+    from app.services.archive import name_key
+
     rows: list[dict[str, Any]] = []
     for ex in exercises:
+        machine = getattr(ex, "machine_name", None)
+        if not machine and machines is not None:
+            machine = machines.get(name_key(ex.name))
         rows.append(
             {
                 "exercise_id": ex.id,
                 "name": ex.name,
-                "machine_name": getattr(ex, "machine_name", None),
+                "machine_name": machine,
                 "target_sets": ex.target_sets,
                 "target_reps_min": ex.target_reps_min,
                 "target_reps_max": ex.target_reps_max,
@@ -316,6 +325,17 @@ async def run_week_plan_for_user(
     errors: list[str] = []
     n_chunks = (len(exs) + EXERCISE_CHUNK - 1) // EXERCISE_CHUNK
 
+    from app.services.archive import name_key, resolve_machine_for_name
+
+    machines: dict[str, str | None] = {}
+    for ex in exs:
+        key = name_key(ex.name)
+        if key in machines:
+            continue
+        machines[key] = (ex.machine_name or None) or await resolve_machine_for_name(
+            session, ex.name
+        )
+
     for i in range(0, len(exs), EXERCISE_CHUNK):
         chunk = exs[i : i + EXERCISE_CHUNK]
         chunk_i = i // EXERCISE_CHUNK + 1
@@ -323,7 +343,7 @@ async def run_week_plan_for_user(
             **ctx,
             "kind": "week_plan",
             "week_start": week_start.isoformat(),
-            "target_exercises": _target_exercises_payload(chunk),
+            "target_exercises": _target_exercises_payload(chunk, machines=machines),
             "chunk": f"{chunk_i}/{n_chunks}",
         }
         raw = await request_coach(

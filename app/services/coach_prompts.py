@@ -35,9 +35,10 @@ DATA_SCHEMA_RU = """Компактный JSON (без дублей):
 • notes, exercise_state (поле m = тренажёр), sessions (в сетах m = тренажёр; без rest_sec)
 • live — только live_set (machine_name; week_plan текущего упражнения если есть)
 • focus — ids цели + machine_name
-• target_exercises — только week_plan: упражнения на целевую неделю
+• target_exercises — только week_plan: id/name/machine_name/target_sets…
 • athletes — только session_group / week_group: несколько атлетов с кодами
-• отдыха между подходами в данных нет — рекомендуй отдых сам в тексте совета"""
+• отдыха между подходами в данных нет — рекомендуй отдых сам в тексте совета
+• machine_name / m — конкретный тренажёр; если указан, cues и советы под него"""
 
 DEFAULT_TASKS: dict[str, str] = {
     "session": (
@@ -85,6 +86,8 @@ DEFAULT_TASKS: dict[str, str] = {
         "\"sets\":[{\"n\":int,\"kg\":number,\"reps\":int,\"rpe\":int}]}]}.\n"
         "Покрывай ВСЕ exercise_id из target_exercises. Число подходов ≈ target_sets.\n"
         "advice: стиль Бендера (едкий, язвительный) — РОВНО 3–4 предложения; "
+        "если у упражнения есть machine_name — ОБЯЗАТЕЛЬНО учти тренажёр "
+        "(посадка, траектория, рычаги/рукояти) в cues/акценте; "
         "объясни ПОЧЕМУ такие kg/reps/rpe + рабочий акцент "
         "(техника/темп/отдых между подходами — рекомендуй секунды сам, "
         "в данных rest_sec нет); ОБЯЗАТЕЛЬНАЯ согласованность с sets[] "
@@ -109,7 +112,8 @@ DEFAULT_TASKS: dict[str, str] = {
         "week_plan если есть). Стиль Бендера, КОРОТКО.\n"
         "Недельный advice на карточке УЖЕ показан — НЕ пересказывай и НЕ копируй "
         "текст live.week_plan.advice; не дублируй те же формулировки.\n"
-        "(1) техника 3–5 cues на ЭТОТ подход сейчас (тренажёр учти); "
+        "(1) техника 3–5 cues на ЭТОТ подход сейчас — если live.machine_name "
+        "или focus.machine_name есть, cues ПОД ЭТОТ тренажёр (не общие); "
         "(2) корректировка по уже залогированным сетам сессии; "
         "(3) при необходимости дай ориентир по отдыху до следующего подхода "
         "(секунд в JSON нет — рекомендуй сам).\n"
@@ -199,6 +203,8 @@ PROMPT_SEED_FLAGS: dict[str, tuple[str, str]] = {
     "week_plan_prompt_rest_advice_v1": (f"{SETTING_PREFIX}week_plan", "week_plan"),
     "exercise_prompt_rest_advice_v1": (f"{SETTING_PREFIX}exercise", "exercise"),
     "system_prompt_rest_advice_v1": (SETTING_SYSTEM, "__system__"),
+    "week_plan_prompt_machine_v1": (f"{SETTING_PREFIX}week_plan", "week_plan"),
+    "live_set_prompt_machine_v1": (f"{SETTING_PREFIX}live_set", "live_set"),
 }
 
 

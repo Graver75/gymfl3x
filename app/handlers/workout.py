@@ -186,6 +186,25 @@ def _ex_title(name: str, data: dict | None = None, exercise=None) -> str:
     return ui.label_exercise(name, machine)
 
 
+async def _resolve_machine(
+    session,
+    *,
+    name: str,
+    exercise=None,
+    data: dict | None = None,
+) -> str | None:
+    """Prefer exercise/FSM machine, else archive prototype."""
+    from app.services.archive import resolve_machine_for_name
+
+    for candidate in (
+        getattr(exercise, "machine_name", None) if exercise is not None else None,
+        (data or {}).get("machine_name"),
+    ):
+        if candidate and str(candidate).strip():
+            return str(candidate).strip()[:128]
+    return await resolve_machine_for_name(session, name)
+
+
 async def _apply_week_plan_to_state(
     state: FSMContext,
     *,
@@ -621,8 +640,12 @@ async def workout_arch_pick(callback: CallbackQuery, state: FSMContext) -> None:
             "target_reps_min": item.target_reps_min,
             "target_reps_max": item.target_reps_max,
             "weight_step": item.weight_step,
-            "machine_name": getattr(item, "machine_name", None),
+            "machine_name": None,
         }
+        machine_name = await _resolve_machine(
+            session, name=item.name, exercise=item
+        )
+        free["machine_name"] = machine_name
         await state.update_data(
             session_id=ws.id,
             template_id=ws.template_id,
@@ -634,7 +657,7 @@ async def workout_arch_pick(callback: CallbackQuery, state: FSMContext) -> None:
             current_set=1,
             drop_index=0,
             last_action_at=touch_action_iso(),
-            machine_name=getattr(item, "machine_name", None),
+            machine_name=machine_name,
         )
         user_id = user.id
         exercise_name = item.name
@@ -707,6 +730,9 @@ async def pick_exercise(callback: CallbackQuery, state: FSMContext) -> None:
                     next_set = max(existing_nums) + 1
         user_id = user.id
         exercise_name = exercise.name
+        machine_name = await _resolve_machine(
+            session, name=exercise_name, exercise=exercise
+        )
         target = f"{exercise.target_sets}×{exercise.target_reps_min}-{exercise.target_reps_max}"
         pr = await exercise_personal_records(
             session, user_id, exercise_id=exercise_id, exercise_name=exercise_name
@@ -720,7 +746,7 @@ async def pick_exercise(callback: CallbackQuery, state: FSMContext) -> None:
         current_set=next_set,
         drop_index=0,
         last_action_at=touch_action_iso(),
-        machine_name=getattr(exercise, "machine_name", None) if exercise else None,
+        machine_name=machine_name,
     )
     loaded = await _load_presets_into_state(
         state,
@@ -892,7 +918,9 @@ async def workout_live_coach(callback: CallbackQuery, state: FSMContext) -> None
 
         name = exercise.name
         ex_id = getattr(exercise, "id", None) or data.get("exercise_id")
-        machine_name = getattr(exercise, "machine_name", None)
+        machine_name = await _resolve_machine(
+            session, name=name, exercise=exercise, data=data
+        )
         target = (
             f"{exercise.target_sets}×{exercise.target_reps_min}-{exercise.target_reps_max}"
         )

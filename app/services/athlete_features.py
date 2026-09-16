@@ -94,12 +94,23 @@ async def build_athlete_snapshot(
         )
     ).scalars().all()
 
+    from app.db.models import ExerciseArchive
+    from app.services.archive import name_key
+
+    arch_machines: dict[str, str] = {
+        a.name_key: a.machine_name
+        for a in (await session.execute(select(ExerciseArchive))).scalars().all()
+        if a.machine_name
+    }
+
     session_payloads: list[dict[str, Any]] = []
     for ws in sessions:
         ordered = sorted(ws.sets, key=lambda s: (s.created_at or datetime.min, s.id))
         set_rows: list[dict[str, Any]] = []
         for s in ordered:
             machine = s.exercise.machine_name if s.exercise else None
+            if not machine and s.exercise_name:
+                machine = arch_machines.get(name_key(s.exercise_name))
             set_rows.append(
                 {
                     "exercise_id": s.exercise_id,
@@ -183,7 +194,14 @@ async def build_athlete_snapshot(
             {
                 "exercise_id": st.exercise_id,
                 "exercise_name": st.exercise.name if st.exercise else None,
-                "machine_name": st.exercise.machine_name if st.exercise else None,
+                "machine_name": (
+                    (st.exercise.machine_name if st.exercise else None)
+                    or (
+                        arch_machines.get(name_key(st.exercise.name))
+                        if st.exercise and st.exercise.name
+                        else None
+                    )
+                ),
                 "working_weight": st.working_weight,
                 "suggested_weight": st.suggested_weight,
                 "last_reps": st.last_reps,

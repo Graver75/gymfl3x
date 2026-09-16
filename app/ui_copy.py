@@ -181,10 +181,11 @@ def label_set(n: int, drop_index: int = 0) -> str:
 
 
 def label_exercise(name: str, machine_name: str | None = None) -> str:
-    line = f"{ICO_EXERCISE} {name}"
+    line = f"{ICO_EXERCISE} {esc(name)}"
     machine = (machine_name or "").strip()
     if machine:
-        line += f"\n`{machine}`"
+        # HTML <code> — моноширинно в Telegram (как `` в markdown)
+        line += f"\n<code>{esc(machine)}</code>"
     return line
 
 
