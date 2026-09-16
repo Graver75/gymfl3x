@@ -214,13 +214,12 @@ async def build_coach_context(
         states = sorted(states, key=lambda x: -(x.get("hard_streak") or 0))[:20]
 
     user = snap.get("user") or {}
+    # Minimal focus ids; live fields live only in `live` (no duplicate blob)
     focus: dict[str, Any] = {
         "session_id": focus_session_id,
         "exercise_id": focus_exercise_id,
         "exercise_name": focus_exercise_name,
     }
-    if live:
-        focus.update(live)
 
     out: dict[str, Any] = {
         "kind": kind,
@@ -232,23 +231,27 @@ async def build_coach_context(
             "exp_m": user.get("experience_months"),
             "code": user.get("short_code"),
         },
-        "adherence": snap.get("adherence"),
-        "aggregates": {
+        "notes": notes,
+        "exercise_state": states,
+        "sessions": sessions_out,
+        "focus": focus,
+    }
+    # Heavy profile blocks — not needed for in-gym set tips
+    if kind != "live_set":
+        out["adherence"] = snap.get("adherence")
+        out["aggregates"] = {
             "sessions_n": len(snap.get("sessions") or []),
-            "total_vol": round(sum(_session_volume(ws) for ws in snap.get("sessions") or []), 1),
+            "total_vol": round(
+                sum(_session_volume(ws) for ws in snap.get("sessions") or []), 1
+            ),
             "avg_rpe": _avg_rpe(snap.get("sessions") or []),
             "bw_delta": (
                 round(float(bw[-1]["weight"]) - float(bw[0]["weight"]), 2)
                 if len(bw) >= 2
                 else None
             ),
-        },
-        "body_weight_series": bw,
-        "notes": notes,
-        "exercise_state": states,
-        "sessions": sessions_out,
-        "focus": focus,
-    }
+        }
+        out["body_weight_series"] = bw
     if live:
         out["live"] = live
     return out

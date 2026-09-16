@@ -103,7 +103,8 @@ async def run_coach_and_reply(
                 await waiting_message.edit_text("Не удалось собрать данные для разбора.")
                 return
 
-            if kind == "session":
+            if kind == "session" or kind == "live_set":
+                # Fresh JSON is enough; past tips only inflate tokens / echo
                 history: list = []
             else:
                 history = history_for_api(await load_dialog_history(session, user_id))
@@ -112,8 +113,7 @@ async def run_coach_and_reply(
                 "exercise_id": focus_exercise_id,
                 "exercise_name": focus_exercise_name,
             }
-            if live:
-                focus.update(live)
+            # Do not merge live into focus — avoids duplicate payload in prompt/JSON
             user_meta = athlete.get("user") or {}
             user_label = user_meta.get("code") or user_meta.get("short_code")
 
@@ -131,11 +131,20 @@ async def run_coach_and_reply(
             )
             return
 
-        user_summary = (
-            f"[разбор:{kind}] focus={focus} "
-            f"sessions={len((athlete.get('sessions') or []))} "
-            f"window={athlete.get('window_days')}"
-        )
+        if kind == "live_set" and live:
+            user_summary = (
+                f"[live_set] ex={live.get('exercise_name') or focus_exercise_name} "
+                f"set={live.get('current_set')} kg={live.get('draft_weight')} "
+                f"done={live.get('sets_done')}"
+            )
+        else:
+            user_summary = (
+                f"[разбор:{kind}] "
+                f"ex={focus_exercise_name or focus.get('exercise_name')} "
+                f"sid={focus_session_id} "
+                f"sessions={len((athlete.get('sessions') or []))} "
+                f"window={athlete.get('window_days')}"
+            )
         async with SessionLocal() as session:
             await append_dialog_turn(
                 session, user_id, role="user", content=user_summary, kind=kind

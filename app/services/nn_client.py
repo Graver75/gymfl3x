@@ -251,12 +251,19 @@ async def request_coach(
     user_text = user_prompt_for(kind, athlete_json, focus or {}, locale=locale)
 
     hist = history or []
-    if kind == "session":
+    if kind in {"session", "live_set"}:
         hist = []
-    elif kind == "live_set":
-        hist = hist[-2:]
     else:
-        hist = hist[-6:]
+        # Compact long prior tips so they don't re-bloat the prompt
+        trimmed: list[dict[str, str]] = []
+        for turn in hist[-6:]:
+            role = turn.get("role") or "user"
+            content = (turn.get("content") or "").strip()
+            if role == "assistant" and len(content) > 400:
+                content = content[:397] + "…"
+            if content:
+                trimmed.append({"role": role, "content": content})
+        hist = trimmed
 
     used_pid, result = await generate_with_provider(
         provider_id=pid,
@@ -265,6 +272,7 @@ async def request_coach(
         history=hist,
     )
 
+    # Log exactly what went to the model (no synthetic re-duplication)
     req_payload = user_text
     if hist:
         bits = []
