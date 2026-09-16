@@ -686,21 +686,38 @@ def admin_bcast_targets_kb(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def admin_hidden_kb() -> InlineKeyboardMarkup:
+def admin_hidden_kb(*, running: bool = False) -> InlineKeyboardMarkup:
     from app.services.week_plan import HIDDEN_JOBS
 
     rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="🔄 Обновить статус", callback_data="adm:hidden")],
+        [InlineKeyboardButton(text="📜 История полностью", callback_data="adm:hidden:hist")],
         [InlineKeyboardButton(text="—— Форс скрытый job ——", callback_data="adm:noop")],
     ]
     for key, title in HIDDEN_JOBS.items():
+        label = title[:64]
+        if running:
+            label = f"⏳ {label}"
         rows.append(
-            [InlineKeyboardButton(text=title[:64], callback_data=f"adm:hidden:k:{key}")]
+            [InlineKeyboardButton(text=label, callback_data=f"adm:hidden:k:{key}")]
         )
     rows.append([InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def admin_hidden_week_plan_kb() -> InlineKeyboardMarkup:
+def admin_hidden_week_plan_kb(*, running: bool = False) -> InlineKeyboardMarkup:
+    if running:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="⏳ Уже выполняется — обновить",
+                        callback_data="adm:hidden",
+                    )
+                ],
+                [InlineKeyboardButton(text=ui.BTN_BACK, callback_data="adm:hidden")],
+            ]
+        )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [

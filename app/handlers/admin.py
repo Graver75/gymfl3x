@@ -1620,16 +1620,59 @@ async def adm_hidden_menu(callback: CallbackQuery) -> None:
         await callback.answer("Нет доступа", show_alert=True)
         return
     from app.keyboards import admin_hidden_kb
+    from app.services.week_plan import (
+        format_hidden_status_html,
+        is_week_plan_running,
+        load_run_history,
+    )
 
+    async with SessionLocal() as session:
+        hist = await load_run_history(session)
+    running = is_week_plan_running()
     await safe_edit_text(
         callback.message,
-        f"{ui.BTN_ADM_HIDDEN_AI}\n\n"
-        "Скрытые job'ы не пишут в чат атлетам — только пишут план в БД.\n"
-        "После форса полный результат (сводка + планы по упражнениям + advice) "
-        "придёт тебе в личку.\n"
-        "Автозапуск: вместе с недельным дайджестом (тот же день/час).\n"
-        "Сырой request/response — в «Запросы ИИ» (kind=week_plan).",
-        reply_markup=admin_hidden_kb(),
+        format_hidden_status_html(history=hist),
+        reply_markup=admin_hidden_kb(running=running),
+    )
+    await callback.answer("Обновлено")
+
+
+@router.callback_query(F.data == "adm:hidden:hist")
+async def adm_hidden_hist(callback: CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not await _full_admin(callback.from_user.id, callback.from_user.full_name or "Admin"):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    from app.keyboards import admin_hidden_kb
+    from app.services.week_plan import is_week_plan_running, load_run_history
+
+    async with SessionLocal() as session:
+        hist = await load_run_history(session)
+    lines = [ui.b(ui.BTN_ADM_HIDDEN_AI + " · история"), ""]
+    if not hist:
+        lines.append("<i>Пока пусто — форсни job или дождись воскресного автозапуска.</i>")
+    else:
+        for h in hist:
+            at = str(h.get("at") or "?")
+            if "T" in at:
+                at = at.replace("T", " ").replace("+00:00", "Z")[:19]
+            mark = "✓" if h.get("ok") else "✗"
+            err = h.get("error")
+            extra = f" · {ui.esc(err)}" if err else ""
+            lines.append(
+                f"<code>{ui.esc(at)}</code> {mark} <b>{ui.esc(h.get('scope'))}</b>\n"
+                f"  неделя {ui.esc(h.get('week_start') or '—')} · "
+                f"{h.get('ok_athletes', '?')}/{h.get('athletes', '?')} атл. · "
+                f"+{h.get('saved', '?')} упр.{extra}"
+            )
+    text = "\n".join(lines)
+    if len(text) > 3900:
+        text = text[:3890] + "…"
+    await safe_edit_text(
+        callback.message,
+        text,
+        reply_markup=admin_hidden_kb(running=is_week_plan_running()),
     )
     await callback.answer()
 
@@ -1643,18 +1686,31 @@ async def adm_hidden_pick(callback: CallbackQuery) -> None:
         return
     kind = callback.data.split(":")[-1]
     from app.keyboards import admin_hidden_week_plan_kb
-    from app.services.week_plan import HIDDEN_JOBS, target_week_start
+    from app.services.week_plan import (
+        HIDDEN_JOBS,
+        get_week_plan_run_status,
+        is_week_plan_running,
+        target_week_start,
+    )
 
     if kind not in HIDDEN_JOBS:
         await callback.answer("?", show_alert=True)
         return
+    running = is_week_plan_running()
     ws = target_week_start()
+    status_line = ""
+    if running:
+        run = get_week_plan_run_status() or {}
+        status_line = (
+            f"\n\n⏳ Сейчас уже выполняется ({ui.esc(run.get('scope'))}). "
+            "Новый форс недоступен."
+        )
     await safe_edit_text(
         callback.message,
         f"Форс: {HIDDEN_JOBS[kind]}\n"
         f"Целевая неделя с {ws.isoformat()} (пн).\n"
-        "Кому прогнать?",
-        reply_markup=admin_hidden_week_plan_kb(),
+        f"Кому прогнать?{status_line}",
+        reply_markup=admin_hidden_week_plan_kb(running=running),
     )
     await callback.answer()
 
@@ -1674,11 +1730,27 @@ async def adm_hidden_go(callback: CallbackQuery) -> None:
         return
     kind = parts[3]
     scope = parts[4]
-    from app.keyboards import admin_hidden_kb
-    from app.services.week_plan import HIDDEN_JOBS, force_week_plan
+    from app.keyboards import admin_hidden_kb, admin_hidden_result_kb
+    from app.services.week_plan import (
+        HIDDEN_JOBS,
+        force_week_plan,
+        format_hidden_status_html,
+        is_week_plan_running,
+        load_run_history,
+    )
 
     if kind != "week_plan" or kind not in HIDDEN_JOBS:
         await callback.answer("?", show_alert=True)
+        return
+    if is_week_plan_running():
+        await callback.answer("Уже выполняется — подожди", show_alert=True)
+        async with SessionLocal() as session:
+            hist = await load_run_history(session)
+        await safe_edit_text(
+            callback.message,
+            format_hidden_status_html(history=hist),
+            reply_markup=admin_hidden_kb(running=True),
+        )
         return
     only_id = user.id if scope == "me" else None
     await callback.answer("Считаю план… смотри личку")
@@ -1687,6 +1759,17 @@ async def adm_hidden_go(callback: CallbackQuery) -> None:
         f"({'только ты' if scope == 'me' else 'все атлеты'})…\n"
         "Результат придёт сюда и в личку."
     )
+    # Refresh menu to show running
+    async with SessionLocal() as session:
+        hist = await load_run_history(session)
+    try:
+        await safe_edit_text(
+            callback.message,
+            format_hidden_status_html(history=hist),
+            reply_markup=admin_hidden_kb(running=True),
+        )
+    except Exception:
+        pass
     report: dict = {}
     try:
         status, report = await force_week_plan(
@@ -1697,8 +1780,6 @@ async def adm_hidden_go(callback: CallbackQuery) -> None:
     except Exception as exc:
         status = f"Ошибка: {exc}"[:300]
         report = {}
-    from app.keyboards import admin_hidden_result_kb
-
     kb = admin_hidden_result_kb(report)
     try:
         await waiting.edit_text(f"{ui.BTN_ADM_HIDDEN_AI}\n\n{status}", reply_markup=kb)

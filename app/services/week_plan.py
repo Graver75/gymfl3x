@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -13,6 +14,7 @@ from aiogram import Bot
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import ui_copy as ui
 from app.config import get_settings
 from app.db.models import (
     AppSetting,
@@ -136,7 +138,91 @@ def _salvage_exercises(raw: str) -> list[dict[str, Any]]:
 EXERCISE_CHUNK = 5
 WEEK_PLAN_MAX_TOKENS = 4096
 SETTING_LAST_PREVIEW = "hidden_week_plan_last_preview"
+SETTING_RUN_HISTORY = "hidden_week_plan_run_history"
 PREVIEW_CHUNK = 3500
+HISTORY_MAX = 20
+
+# In-process run flag (single systemd worker)
+_job_lock = asyncio.Lock()
+_job_running: dict[str, Any] | None = None
+
+
+def is_week_plan_running() -> bool:
+    return _job_running is not None
+
+
+def get_week_plan_run_status() -> dict[str, Any] | None:
+    """Snapshot of current run, or None if idle."""
+    if _job_running is None:
+        return None
+    return dict(_job_running)
+
+
+async def load_run_history(session: AsyncSession) -> list[dict[str, Any]]:
+    row = await session.get(AppSetting, SETTING_RUN_HISTORY)
+    if not row or not (row.value or "").strip():
+        return []
+    try:
+        data = json.loads(row.value)
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
+
+
+async def append_run_history(session: AsyncSession, entry: dict[str, Any]) -> None:
+    hist = await load_run_history(session)
+    hist.insert(0, entry)
+    hist = hist[:HISTORY_MAX]
+    value = json.dumps(hist, ensure_ascii=False)
+    row = await session.get(AppSetting, SETTING_RUN_HISTORY)
+    if row is None:
+        session.add(AppSetting(key=SETTING_RUN_HISTORY, value=value))
+    else:
+        row.value = value
+    await session.commit()
+
+
+def format_hidden_status_html(*, history: list[dict[str, Any]] | None = None) -> str:
+    """Status block for admin hidden-AI screen."""
+    run = get_week_plan_run_status()
+    lines = [ui.b(ui.BTN_ADM_HIDDEN_AI), ""]
+    if run:
+        started = str(run.get("started_at") or "?")
+        if "T" in started:
+            started = started.replace("T", " ")[:19]
+        scope = run.get("scope") or "?"
+        lines.append("Статус: <b>🟢 выполняется</b>")
+        lines.append(f"с {ui.esc(started)} · {ui.esc(scope)}")
+    else:
+        lines.append("Статус: <b>⚪ не выполняется</b>")
+    lines.append("")
+    lines.append(
+        "Скрытые job'ы не пишут в чат атлетам — только пишут план в БД.\n"
+        "После форса полный результат придёт тебе в личку.\n"
+        "Автозапуск: вместе с недельным дайджестом (тот же день/час)."
+    )
+    hist = history or []
+    if hist:
+        lines.append("")
+        lines.append("<b>История</b> (последние):")
+        for h in hist[:10]:
+            at = str(h.get("at") or "?")
+            if "T" in at:
+                at = at.replace("T", " ")[5:16]
+            mark = "✓" if h.get("ok") else "✗"
+            scope = h.get("scope") or "?"
+            ok_a = h.get("ok_athletes", "?")
+            n_a = h.get("athletes", "?")
+            saved = h.get("saved", "?")
+            lines.append(
+                f"· <code>{ui.esc(at)}</code> {mark} {ui.esc(scope)} · "
+                f"{ok_a}/{n_a} атл. · +{saved} упр."
+            )
+    else:
+        lines.append("")
+        lines.append("<i>История пока пуста.</i>")
+    return "\n".join(lines)
+
 
 
 async def exercises_for_week(
@@ -696,9 +782,36 @@ async def maybe_run_scheduled_week_plan(bot: Bot | None = None) -> None:
         if await _already_sent(session, 0, today, "ai_week_plan"):
             return
 
-    report = await run_week_plan_batch()
-    async with SessionLocal() as session:
-        await _mark_sent(session, 0, today, "ai_week_plan")
+    if _job_lock.locked() or _job_running is not None:
+        logger.info("week_plan scheduled skipped — already running")
+        return
+
+    async with _job_lock:
+        global _job_running
+        _job_running = {
+            "scope": "cron",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }
+        report: dict[str, Any] = {}
+        try:
+            report = await run_week_plan_batch()
+            async with SessionLocal() as session:
+                await _mark_sent(session, 0, today, "ai_week_plan")
+                await append_run_history(
+                    session,
+                    {
+                        "at": datetime.now(timezone.utc).isoformat(),
+                        "scope": "cron",
+                        "ok": bool(report.get("ok")),
+                        "athletes": report.get("athletes"),
+                        "ok_athletes": report.get("ok_athletes"),
+                        "saved": report.get("exercises_saved"),
+                        "week_start": report.get("week_start"),
+                        "error": report.get("error"),
+                    },
+                )
+        finally:
+            _job_running = None
 
     logger.info(
         "week_plan scheduled: ok=%s athletes=%s saved=%s",
@@ -720,7 +833,46 @@ async def force_week_plan(
 
     Returns (panel_text, report) — report used for expand-preview buttons.
     """
-    report = await run_week_plan_batch(only_user_id=only_user_id)
+    global _job_running
+    if _job_running is not None or _job_lock.locked():
+        run = get_week_plan_run_status() or {}
+        started = str(run.get("started_at") or "?")
+        return (
+            f"Уже выполняется (с {started}, {run.get('scope')}). "
+            "Дождись окончания или обнови статус.",
+            {},
+        )
+
+    scope = f"me:{only_user_id}" if only_user_id is not None else "all"
+    async with _job_lock:
+        _job_running = {
+            "scope": scope,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "admin_telegram_id": admin_telegram_id,
+        }
+        report: dict[str, Any] = {}
+        try:
+            report = await run_week_plan_batch(only_user_id=only_user_id)
+            async with SessionLocal() as session:
+                await append_run_history(
+                    session,
+                    {
+                        "at": datetime.now(timezone.utc).isoformat(),
+                        "scope": scope,
+                        "ok": bool(report.get("ok")),
+                        "athletes": report.get("athletes"),
+                        "ok_athletes": report.get("ok_athletes"),
+                        "saved": report.get("exercises_saved"),
+                        "week_start": report.get("week_start"),
+                        "error": report.get("error"),
+                    },
+                )
+        finally:
+            _job_running = None
+
+    if not report:
+        return "Job оборвался без результата.", {}
+
     summary = format_batch_summary(report)
 
     week_raw = report.get("week_start")
@@ -763,8 +915,6 @@ async def force_week_plan(
         detail,
     )
     if raw_block:
-        from app import ui_copy as ui
-
         for chunk in _chunk_text(raw_block):
             try:
                 await bot.send_message(admin_telegram_id, ui.pre(chunk))
