@@ -98,7 +98,6 @@ async def build_athlete_snapshot(
     for ws in sessions:
         ordered = sorted(ws.sets, key=lambda s: (s.created_at or datetime.min, s.id))
         set_rows: list[dict[str, Any]] = []
-        prev_at = None
         for s in ordered:
             machine = s.exercise.machine_name if s.exercise else None
             set_rows.append(
@@ -114,10 +113,8 @@ async def build_athlete_snapshot(
                     "difficulty": s.difficulty.value if s.difficulty else None,
                     "rpe_1_10": s.rpe_1_10,
                     "created_at": _iso(s.created_at),
-                    "rest_sec": _rest_seconds(prev_at, s.created_at),
                 }
             )
-            prev_at = s.created_at
         duration_sec = None
         if ws.started_at and ws.finished_at:
             duration_sec = _rest_seconds(ws.started_at, ws.finished_at)

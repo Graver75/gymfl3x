@@ -49,7 +49,6 @@ def _compact_set(row: dict[str, Any]) -> dict[str, Any]:
         "kg": row.get("weight"),
         "diff": row.get("difficulty"),
         "rpe": row.get("rpe_1_10"),
-        "rest": row.get("rest_sec"),
     }
     machine = row.get("machine_name")
     if machine:
