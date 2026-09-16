@@ -83,6 +83,8 @@ async def main() -> None:
         args=[bot, settings],
         id="morning_reminder",
         replace_existing=True,
+        misfire_grace_time=3600,
+        coalesce=True,
     )
     scheduler.add_job(
         send_evening_recaps,
@@ -91,6 +93,8 @@ async def main() -> None:
         args=[bot, settings],
         id="evening_recap",
         replace_existing=True,
+        misfire_grace_time=3600,
+        coalesce=True,
     )
     scheduler.add_job(
         send_week_digests,
@@ -99,6 +103,8 @@ async def main() -> None:
         args=[bot, settings],
         id="week_digest",
         replace_existing=True,
+        misfire_grace_time=3600,
+        coalesce=True,
     )
     scheduler.start()
     logger.info(

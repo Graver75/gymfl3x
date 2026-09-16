@@ -136,6 +136,8 @@ async def build_week_group_payload(
                 "name": user.display_name,
                 "user": ctx.get("user"),
                 "adherence": ctx.get("adherence"),
+                "plan_adherence": ctx.get("plan_adherence"),
+                "week_plans": ctx.get("week_plans"),
                 "aggregates": ctx.get("aggregates"),
                 "sessions": ctx.get("sessions"),
                 "exercise_state": ctx.get("exercise_state"),

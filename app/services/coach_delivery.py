@@ -142,12 +142,33 @@ async def run_coach_and_reply(
             from app.services.week_plan import parse_gf_next
 
             raw, suggest, explicit_none = parse_gf_next(raw)
+            if not (raw or "").strip():
+                raw = "Без текста — только служебная метка. Продолжай лог."
             if fsm_state is not None:
                 try:
                     if explicit_none:
                         await fsm_state.update_data(live_suggest=None)
                     elif suggest is not None:
-                        await fsm_state.update_data(live_suggest=suggest)
+                        for_set = None
+                        if live and live.get("current_set") is not None:
+                            try:
+                                for_set = int(live["current_set"])
+                            except (TypeError, ValueError):
+                                for_set = None
+                        payload = dict(suggest)
+                        if for_set is not None:
+                            payload["for_set"] = for_set
+                        fsm_updates: dict[str, Any] = {"live_suggest": payload}
+                        # Mirror tip into draft so user doesn't log old weight by inertia
+                        if suggest.get("kg") is not None:
+                            fsm_updates["draft_weight"] = float(suggest["kg"])
+                            fsm_updates["ai_plan_kg"] = float(suggest["kg"])
+                        if suggest.get("reps") is not None:
+                            fsm_updates["ai_plan_reps"] = int(suggest["reps"])
+                            fsm_updates["smart_default_reps"] = int(suggest["reps"])
+                        if suggest.get("rpe") is not None:
+                            fsm_updates["ai_plan_rpe"] = int(suggest["rpe"])
+                        await fsm_state.update_data(**fsm_updates)
                 except Exception:
                     logger.exception("Failed to store live_suggest in FSM")
 

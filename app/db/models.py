@@ -323,7 +323,7 @@ class RecapSent(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     chat_id: Mapped[int] = mapped_column(BigInteger)
     recap_date: Mapped[date] = mapped_column(Date)
-    kind: Mapped[str] = mapped_column(String(16))  # reminder | recap | ai_week_plan
+    kind: Mapped[str] = mapped_column(String(32))  # reminder | recap | ai_week_plan | …
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

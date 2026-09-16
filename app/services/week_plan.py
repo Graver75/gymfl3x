@@ -94,7 +94,7 @@ _GF_NEXT_RE = re.compile(
     r"(?:none|"
     r"kg\s*=\s*([\d.,]+)\s+reps\s*=\s*(\d+)"
     r"(?:\s+rpe\s*=\s*(\d+))?)"
-    r"\s*$"
+    r".*$"
 )
 
 
@@ -114,28 +114,32 @@ def parse_gf_next(text: str) -> tuple[str, dict[str, Any] | None, bool]:
     explicit_none = False
     found = False
     for line in lines:
-        m = _GF_NEXT_RE.match(line.strip())
-        if not m:
+        stripped = line.strip()
+        if not re.match(r"(?i)^GF_NEXT:\s*", stripped):
             kept.append(line)
             continue
         found = True
-        raw = line.strip()
-        if re.search(r"(?i)GF_NEXT:\s*none\s*$", raw):
+        m = _GF_NEXT_RE.match(stripped)
+        if re.search(r"(?i)^GF_NEXT:\s*none\b", stripped):
             explicit_none = True
             suggest = None
-        else:
-            kg_s, reps_s, rpe_s = m.group(1), m.group(2), m.group(3)
+            continue
+        if not m or m.group(1) is None:
+            # Unparseable GF_NEXT — still strip from user-visible text
+            continue
+        kg_s, reps_s, rpe_s = m.group(1), m.group(2), m.group(3)
+        try:
+            kg = float(str(kg_s).replace(",", "."))
+            reps = int(reps_s)
+        except (TypeError, ValueError):
+            continue
+        suggest = {"kg": kg, "reps": reps}
+        explicit_none = False
+        if rpe_s is not None:
             try:
-                kg = float(str(kg_s).replace(",", "."))
-                reps = int(reps_s)
+                suggest["rpe"] = int(rpe_s)
             except (TypeError, ValueError):
-                continue
-            suggest = {"kg": kg, "reps": reps}
-            if rpe_s is not None:
-                try:
-                    suggest["rpe"] = int(rpe_s)
-                except (TypeError, ValueError):
-                    pass
+                pass
     if not found:
         return text, None, False
     clean = "\n".join(kept).strip()
@@ -148,22 +152,25 @@ def planned_target_from_fsm(
     set_number: int,
     drop_index: int = 0,
 ) -> dict[str, Any] | None:
-    """Resolve AI proposal for a logged set: live_suggest > week_plan slot."""
+    """Resolve AI proposal for a logged set: live_suggest (same set) > week_plan slot."""
     if int(drop_index or 0) != 0:
         return None
     live = data.get("live_suggest")
     if isinstance(live, dict) and live.get("kg") is not None and live.get("reps") is not None:
-        out: dict[str, Any] = {
-            "planned_kg": float(live["kg"]),
-            "planned_reps": int(live["reps"]),
-            "plan_source": "live",
-        }
-        if live.get("rpe") is not None:
-            try:
-                out["planned_rpe"] = int(live["rpe"])
-            except (TypeError, ValueError):
-                pass
-        return out
+        live_set = live.get("for_set")
+        # If tip was bound to a set number, only stamp that set
+        if live_set is None or int(live_set) == int(set_number):
+            out: dict[str, Any] = {
+                "planned_kg": float(live["kg"]),
+                "planned_reps": int(live["reps"]),
+                "plan_source": "live",
+            }
+            if live.get("rpe") is not None:
+                try:
+                    out["planned_rpe"] = int(live["rpe"])
+                except (TypeError, ValueError):
+                    pass
+            return out
     week_plan = data.get("week_plan")
     if not isinstance(week_plan, dict):
         return None
@@ -911,6 +918,9 @@ async def maybe_run_scheduled_week_plan(bot: Bot | None = None) -> None:
         return
 
     async with _job_lock:
+        async with SessionLocal() as session:
+            if await _already_sent(session, 0, today, "ai_week_plan"):
+                return
         _job_running = {
             "scope": "cron",
             "started_at": datetime.now(timezone.utc).isoformat(),
@@ -919,7 +929,9 @@ async def maybe_run_scheduled_week_plan(bot: Bot | None = None) -> None:
         try:
             report = await run_week_plan_batch()
             async with SessionLocal() as session:
-                await _mark_sent(session, 0, today, "ai_week_plan")
+                # Only dedup-mark on partial/full success so a total fail can retry same day
+                if report.get("ok") or int(report.get("exercises_saved") or 0) > 0:
+                    await _mark_sent(session, 0, today, "ai_week_plan")
                 await append_run_history(
                     session,
                     {

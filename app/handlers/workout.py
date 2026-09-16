@@ -1201,7 +1201,7 @@ async def _append_reps_and_continue(
     part: dict = {
         "set_number": set_number,
         "drop_index": drop_index,
-        "weight": float(data["draft_weight"]),
+        "weight": float(data.get("draft_weight") if data.get("draft_weight") is not None else 20.0),
         "reps": reps,
         "rpe": None,
     }
@@ -1211,11 +1211,15 @@ async def _append_reps_and_continue(
     if planned:
         part.update(planned)
     logged.append(part)
-    await state.update_data(
-        logged=logged,
-        draft_reps=reps,
-        last_action_at=touch_action_iso(),
-    )
+    updates: dict = {
+        "logged": logged,
+        "draft_reps": reps,
+        "last_action_at": touch_action_iso(),
+    }
+    # Consume one-shot live tip after it was stamped onto this set
+    if planned and planned.get("plan_source") == "live":
+        updates["live_suggest"] = None
+    await state.update_data(**updates)
 
     log_level = LogLevel.minimal
     if from_user_id is not None:
@@ -1278,7 +1282,9 @@ async def next_set(callback: CallbackQuery, state: FSMContext) -> None:
         return
     data = await state.get_data()
     logged = data.get("logged") or []
-    next_no = _unique_set_count(logged) + 1
+    max_logged = max((int(p["set_number"]) for p in logged), default=0)
+    cur = int(data.get("current_set") or 0)
+    next_no = max(max_logged, cur) + 1
     last_main = next(
         (p for p in reversed(logged) if int(p["drop_index"]) == 0),
         logged[-1] if logged else None,
@@ -1389,6 +1395,9 @@ async def drop_set(callback: CallbackQuery, state: FSMContext) -> None:
         current_set=set_no,
         drop_index=next_drop,
         last_action_at=touch_action_iso(),
+        ai_plan_kg=None,
+        ai_plan_reps=None,
+        ai_plan_rpe=None,
     )
     await _load_presets_into_state(
         state,
@@ -1519,6 +1528,20 @@ async def pick_difficulty(callback: CallbackQuery, state: FSMContext) -> None:
             return
 
         ex_id = getattr(exercise, "id", None)
+        # Include already-saved sets in this session (resume mid-exercise)
+        if ex_id is not None:
+            db_rows = (
+                await session.execute(
+                    select(SessionSet.set_number).where(
+                        SessionSet.session_id == ws.id,
+                        SessionSet.exercise_id == ex_id,
+                        SessionSet.set_number > 0,
+                    )
+                )
+            ).all()
+            db_nums = {int(r[0]) for r in db_rows}
+            fsm_nums = {int(p["set_number"]) for p in logged}
+            sets_count = len(db_nums | fsm_nums) or sets_count
         for part in logged:
             r = int(part["reps"])
             w = float(part["weight"])

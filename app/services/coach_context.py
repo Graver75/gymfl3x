@@ -449,16 +449,52 @@ async def build_coach_context(
             or pa.get("exercises")
             or pa.get("deviations")
         ):
-            # Compact for tokens
+            exercises_pa = list(pa.get("exercises") or [])
+            deviations_pa = list(pa.get("deviations") or [])
+            if kind == "exercise":
+                if focus_exercise_id is not None:
+                    exercises_pa = [
+                        e
+                        for e in exercises_pa
+                        if e.get("exercise_id") == focus_exercise_id
+                    ]
+                elif focus_exercise_name:
+                    exercises_pa = [
+                        e
+                        for e in exercises_pa
+                        if e.get("exercise_name") == focus_exercise_name
+                    ]
+                names = {e.get("exercise_name") for e in exercises_pa}
+                if focus_exercise_name:
+                    names.add(focus_exercise_name)
+                deviations_pa = [d for d in deviations_pa if d.get("ex") in names]
             out["plan_adherence"] = {
-                "with_plan_sets": pa.get("with_plan_sets"),
-                "followed_sets": pa.get("followed_sets"),
-                "deviated_sets": pa.get("deviated_sets"),
-                "exercises": (pa.get("exercises") or [])[:30],
-                "deviations": (pa.get("deviations") or [])[-20:],
+                "with_plan_sets": (
+                    sum(int(e.get("with_plan_n") or 0) for e in exercises_pa)
+                    if kind == "exercise"
+                    else pa.get("with_plan_sets")
+                ),
+                "followed_sets": (
+                    sum(int(e.get("followed_n") or 0) for e in exercises_pa)
+                    if kind == "exercise"
+                    else pa.get("followed_sets")
+                ),
+                "deviated_sets": (
+                    sum(int(e.get("deviated_n") or 0) for e in exercises_pa)
+                    if kind == "exercise"
+                    else pa.get("deviated_sets")
+                ),
+                "exercises": exercises_pa[:30],
+                "deviations": deviations_pa[-20:],
             }
         wps = snap.get("week_plans") or []
         if wps and kind in WEEKLY_KINDS | {"exercise", "month", "session"}:
+            if kind == "exercise" and focus_exercise_id is not None:
+                wps = [wp for wp in wps if wp.get("exercise_id") == focus_exercise_id]
+            elif kind == "exercise" and focus_exercise_name:
+                wps = [
+                    wp for wp in wps if wp.get("exercise_name") == focus_exercise_name
+                ]
             out["week_plans"] = [
                 {
                     "ex_id": wp.get("exercise_id"),
