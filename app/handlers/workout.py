@@ -1929,6 +1929,7 @@ async def _finalize_finished_session(callback: CallbackQuery, state: FSMContext)
         show_admin = can_open_admin(user)
         db_user_id = user.id
         finished_session_id = ws.id
+        logged_sets_n = len(ws.sets or [])
         from app.services.ai_digests import wants_session_dm
 
         allow_session_dm = wants_session_dm(user)
@@ -1946,9 +1947,13 @@ async def _finalize_finished_session(callback: CallbackQuery, state: FSMContext)
         f"{ui.ICO_DONE} Готово. Сводка уйдёт в общий чат вечером.",
         reply_markup=main_menu(show_admin=show_admin),
     )
-    # Optional LLM session feedback — DM only if profile allows
+    # Optional LLM session feedback — only if there is something to review
     try:
-        if allow_session_dm and await get_nn_status() == NnStatus.online:
+        if (
+            allow_session_dm
+            and logged_sets_n > 0
+            and await get_nn_status() == NnStatus.online
+        ):
             asyncio.create_task(
                 run_coach_and_reply(
                     bot=callback.bot,

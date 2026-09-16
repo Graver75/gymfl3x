@@ -65,10 +65,16 @@ DATA_SCHEMA_RU = """Компактный JSON (без дублей):
 DEFAULT_TASKS: dict[str, str] = {
     "session": (
         "Только что закончена тренировка athlete.focus.session_id. "
-        "Стиль Бендера. Структура СТРОГО:\n"
+        "Стиль Бендера. Разбирай ТОЛЬКО упражнения из focus.logged_ex "
+        "(сеты с is_focus=true). Сессии с cmp=true — сравнение тех же "
+        "упражнений с прошлых дней; НЕ разбирай их как сегодняшнюю тренировку "
+        "и НЕ добавляй упражнения вне focus.logged_ex.\n"
+        "Если focus.empty=true или logged_ex пуст — коротко скажи что "
+        "тренировка без залогированных подходов; без списка упражнений.\n"
+        "Структура СТРОГО:\n"
         "1) Общий вердикт дня (1–2 предложения).\n"
-        "2) КАЖДОЕ упражнение сессии: оценка 1–10; вес/reps vs прошлый раз "
-        "(если есть в sessions); прогноз на следующий раз (вес/reps).\n"
+        "2) КАЖДОЕ упражнение из focus.logged_ex: оценка 1–10; вес/reps vs "
+        "прошлый раз (cmp-сессии); прогноз на следующий раз (вес/reps).\n"
         "3) 1–2 жёстко-шуточных приговора.\n"
         "Без уровней силы. Не больше ~15 коротких предложений. Цифры только из JSON."
     ),
@@ -306,10 +312,11 @@ _KIND_PAYLOAD_BRIEF: dict[str, str] = {
         "JSON атлета — в user-сообщении вместе с задачей и DATA_SCHEMA_RU."
     ),
     "session": (
-        "Один атлет · окно ~14 дн · до 8 сессий. "
-        "user (фаза/вес/рост/пол/возраст/стаж/код), sessions (focus + прошлые, "
-        "полные сеты на focus), exercise_state, notes, adherence, aggregates, "
-        "BW-серия, focus.session_id. Без live / athletes / target_exercises."
+        "Один атлет · окно ~14 дн. "
+        "focus.logged_ex / empty; sessions: is_focus (полные сеты) + cmp "
+        "(только те же упражнения с прошлых дней). "
+        "notes/exercise_state/plan_adherence — по logged_ex. "
+        "adherence, aggregates, BW — фон. Без live / athletes."
     ),
     "session_group": (
         "Общий чат дня: fact_recap + athletes[] (код/имя + урезанный session-контекст "
@@ -366,17 +373,14 @@ _KIND_PAYLOAD_FULL: dict[str, str] = {
     ),
     "session": (
         "kind=session\n"
-        "window_days=14 · max_sessions=8\n\n"
+        "window_days=14 · focus + до 2 cmp\n\n"
         "Корни JSON:\n"
         "· user: phase, log_level, bw, height_cm, exp_m, code, sex, age\n"
-        "· focus: session_id (+ machine если есть)\n"
-        "· sessions[]: id, date, tpl, dur, checkin, vol, sets_n, parts_n;\n"
-        "  focus/недавние same-tpl — полные sets[] (ex,n,d,reps,kg,diff,rpe,m);\n"
-        "  остальные — компакт\n"
-        "· exercise_state[]: ex_id, ex, m, ww, sw, last_reps/sets, diff, hard_streak, note\n"
-        "· notes[]: ex, text, cleared, at\n"
-        "· adherence, aggregates (sessions_n, total_vol, avg_rpe, bw_delta)\n"
-        "· body_weight_series[]\n\n"
+        "· focus: session_id, logged_ex[], empty\n"
+        "· sessions[]: одна is_focus=true (полные sets[]);\n"
+        "  cmp=true — by_ex только по logged_ex (сравнение с прошлых дней)\n"
+        "· exercise_state / notes / plan_adherence / week_plans — только logged_ex\n"
+        "· adherence, aggregates, body_weight_series — общий фон\n\n"
         "Нет: live, athletes, target_exercises, schedule, rest_sec, уровни силы"
     ),
     "session_group": (
@@ -507,6 +511,7 @@ PROMPT_SEED_FLAGS: dict[str, tuple[str, str]] = {
     "plan_adherence_week_plan_v1": (f"{SETTING_PREFIX}week_plan", "week_plan"),
     "plan_adherence_exercise_v1": (f"{SETTING_PREFIX}exercise", "exercise"),
     "plan_adherence_month_v1": (f"{SETTING_PREFIX}month", "month"),
+    "session_prompt_focus_logged_only_v1": (f"{SETTING_PREFIX}session", "session"),
 }
 
 

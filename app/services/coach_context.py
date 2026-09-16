@@ -95,6 +95,34 @@ def _working_sets_n(sets: list[dict[str, Any]]) -> int:
     return len(keys)
 
 
+def _exercise_names_in_session(ws: dict[str, Any] | None) -> list[str]:
+    if not ws:
+        return []
+    names: list[str] = []
+    seen: set[str] = set()
+    for s in ws.get("sets") or []:
+        name = s.get("exercise_name")
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return names
+
+
+def _filter_session_to_exercises(
+    ws: dict[str, Any], names: set[str]
+) -> dict[str, Any] | None:
+    """Keep only sets for given exercise names; None if nothing left."""
+    if not names:
+        return None
+    keep = [s for s in (ws.get("sets") or []) if s.get("exercise_name") in names]
+    if not keep:
+        return None
+    slim = dict(ws)
+    slim["sets"] = keep
+    return slim
+
+
 def _ex_volume(vals: dict[str, Any]) -> float:
     total = 0.0
     for reps, kg in zip(vals.get("reps") or [], vals.get("kg") or []):
@@ -265,19 +293,34 @@ async def build_coach_context(
                 focus_session = ws
                 break
 
+    focus_logged_names: list[str] | None = None
     if kind == "session" and focus_session is not None:
-        tpl_id = focus_session.get("template_id")
-        same = [ws for ws in sessions if ws.get("template_id") == tpl_id]
-        prev = [ws for ws in same if ws.get("id") != focus_session_id][-2:]
-        picked = prev + [focus_session]
-        other_ids = {ws.get("id") for ws in picked}
-        extras = [ws for ws in sessions if ws.get("id") not in other_ids][-3:]
-        sessions_out = [
-            _compact_session(
-                ws, full_sets=(ws.get("id") == focus_session_id or ws in prev)
-            )
-            for ws in extras + picked
-        ]
+        # Review ONLY exercises logged in the finished focus session.
+        # History is comparison for those same names (your past days), not a second workout.
+        focus_logged_names = _exercise_names_in_session(focus_session)
+        name_set = set(focus_logged_names)
+        focus_compact = _compact_session(focus_session, full_sets=True)
+        focus_compact["is_focus"] = True
+        sessions_out = [focus_compact]
+        if name_set:
+            tpl_id = focus_session.get("template_id")
+            same = [
+                ws
+                for ws in sessions
+                if ws.get("template_id") == tpl_id
+                and ws.get("id") != focus_session_id
+            ]
+            for ws in same[-2:]:
+                slim = _filter_session_to_exercises(ws, name_set)
+                if slim is None:
+                    continue
+                prev_c = _compact_session(slim, full_sets=False)
+                prev_c["cmp"] = True
+                sessions_out.append(prev_c)
+    elif kind == "session" and focus_session_id is not None:
+        # Focus id given but not in snapshot — don't dump unrelated history as "the workout".
+        sessions_out = []
+        focus_logged_names = []
     elif kind in {"exercise", "live_set"}:
         filtered = []
         for ws in sessions:
@@ -325,6 +368,9 @@ async def build_coach_context(
             if focus_exercise_id is not None and n.get("exercise_id") != focus_exercise_id:
                 if not (focus_exercise_name and n.get("exercise_name") == focus_exercise_name):
                     continue
+        elif kind == "session" and focus_logged_names is not None:
+            if n.get("exercise_name") not in set(focus_logged_names):
+                continue
         notes.append(
             {
                 "ex": n.get("exercise_name"),
@@ -336,9 +382,13 @@ async def build_coach_context(
     notes = notes[-15:] if kind not in WEEKLY_KINDS else notes[-40:]
 
     states = []
+    focus_name_set = set(focus_logged_names) if focus_logged_names is not None else None
     for st in snap.get("exercise_state") or []:
         if kind in {"exercise", "live_set"}:
             if focus_exercise_id is not None and st.get("exercise_id") != focus_exercise_id:
+                continue
+        elif kind == "session" and focus_name_set is not None:
+            if st.get("exercise_name") not in focus_name_set:
                 continue
         # month: prefer stuck / notable; weekly: all with weights
         if kind == "month" and not (st.get("hard_streak") or 0) and not st.get(
@@ -384,6 +434,10 @@ async def build_coach_context(
         "exercise_id": focus_exercise_id,
         "exercise_name": focus_exercise_name,
     }
+    if kind == "session":
+        logged = focus_logged_names if focus_logged_names is not None else []
+        focus["logged_ex"] = logged
+        focus["empty"] = len(logged) == 0
     live_machine = (live or {}).get("machine_name") if live else None
     if live_machine:
         focus["machine_name"] = live_machine
@@ -468,20 +522,29 @@ async def build_coach_context(
                 if focus_exercise_name:
                     names.add(focus_exercise_name)
                 deviations_pa = [d for d in deviations_pa if d.get("ex") in names]
+            elif kind == "session" and focus_name_set is not None:
+                exercises_pa = [
+                    e
+                    for e in exercises_pa
+                    if e.get("exercise_name") in focus_name_set
+                ]
+                deviations_pa = [
+                    d for d in deviations_pa if d.get("ex") in focus_name_set
+                ]
             out["plan_adherence"] = {
                 "with_plan_sets": (
                     sum(int(e.get("with_plan_n") or 0) for e in exercises_pa)
-                    if kind == "exercise"
+                    if kind in {"exercise", "session"}
                     else pa.get("with_plan_sets")
                 ),
                 "followed_sets": (
                     sum(int(e.get("followed_n") or 0) for e in exercises_pa)
-                    if kind == "exercise"
+                    if kind in {"exercise", "session"}
                     else pa.get("followed_sets")
                 ),
                 "deviated_sets": (
                     sum(int(e.get("deviated_n") or 0) for e in exercises_pa)
-                    if kind == "exercise"
+                    if kind in {"exercise", "session"}
                     else pa.get("deviated_sets")
                 ),
                 "exercises": exercises_pa[:30],
@@ -494,6 +557,10 @@ async def build_coach_context(
             elif kind == "exercise" and focus_exercise_name:
                 wps = [
                     wp for wp in wps if wp.get("exercise_name") == focus_exercise_name
+                ]
+            elif kind == "session" and focus_name_set is not None:
+                wps = [
+                    wp for wp in wps if wp.get("exercise_name") in focus_name_set
                 ]
             out["week_plans"] = [
                 {
