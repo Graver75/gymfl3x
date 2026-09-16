@@ -141,58 +141,6 @@ async def build_evening_fact(session: AsyncSession, day: date) -> tuple[str, Any
     return text, template
 
 
-async def send_week_group_digest(
-    bot: Bot,
-    chat_id: int,
-    *,
-    day: date | None = None,
-) -> str:
-    """Build week_group LLM digest and post into chat_id. Returns 'ok' or error text."""
-    from sqlalchemy import select
-
-    from app.services.ai_digests import build_week_group_payload, wants_week_group
-    from app.services.nn_client import NnStatus, get_nn_status, request_coach
-    from app.services.reminders import WEEKDAY_NAMES
-
-    settings = get_settings()
-    tz = ZoneInfo(settings.timezone)
-    today = day or datetime.now(tz).date()
-
-    if await get_nn_status() != NnStatus.online:
-        return "ИИ офлайн — week_group не отправлен"
-
-    async with SessionLocal() as session:
-        users = list(
-            (
-                await session.execute(select(User).where(User.onboarding_done.is_(True)))
-            ).scalars().all()
-        )
-        athletes = [u for u in users if wants_week_group(u)] or users
-        if not athletes:
-            return "Нет атлетов для недельного батча"
-        payload = await build_week_group_payload(session, athletes=athletes)
-
-    raw = await request_coach(
-        kind="week_group",
-        athlete=payload,
-        focus={"date": today.isoformat(), "force": True},
-        history=[],
-        user_id=None,
-        user_label="force",
-    )
-    if not raw:
-        return "LLM не ответил на week_group"
-
-    body = (
-        f"{ui.ICO_NN} Недельный разбор команды "
-        f"({WEEKDAY_NAMES[today.weekday()]})\n\n{ui.coach_html(raw)}"
-    )
-    if len(body) > 4000:
-        body = body[:3990] + "…"
-    await bot.send_message(chat_id, body)
-    return "ok"
-
-
 async def force_broadcast(
     bot: Bot,
     *,
@@ -275,10 +223,39 @@ async def force_broadcast(
             return f"Отправлено: {FORCE_KINDS[kind]} → {target_label}"
 
         if kind == "wg":
-            status = await send_week_group_digest(bot, target_chat_id, day=today)
-            if status == "ok":
-                return f"Отправлено: {FORCE_KINDS[kind]} → {target_label}"
-            return status
+            if await get_nn_status() != NnStatus.online:
+                return "ИИ офлайн — week_group не отправлен"
+            from app.services.ai_digests import build_week_group_payload, wants_week_group
+
+            users = list(
+                (
+                    await session.execute(
+                        select(User).where(User.onboarding_done.is_(True))
+                    )
+                ).scalars().all()
+            )
+            athletes = [u for u in users if wants_week_group(u)] or users
+            if not athletes:
+                return "Нет атлетов для недельного батча"
+            payload = await build_week_group_payload(session, athletes=athletes)
+            raw = await request_coach(
+                kind="week_group",
+                athlete=payload,
+                focus={"date": today.isoformat(), "force": True},
+                history=[],
+                user_id=None,
+                user_label="force",
+            )
+            if not raw:
+                return "LLM не ответил на week_group"
+            body = (
+                f"{ui.ICO_NN} Недельный разбор команды "
+                f"({WEEKDAY_NAMES[today.weekday()]})\n\n{ui.coach_html(raw)}"
+            )
+            if len(body) > 4000:
+                body = body[:3990] + "…"
+            await bot.send_message(target_chat_id, body)
+            return f"Отправлено: {FORCE_KINDS[kind]} → {target_label}"
 
         if kind == "wdm":
             if await get_nn_status() != NnStatus.online:
