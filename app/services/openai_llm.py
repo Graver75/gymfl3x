@@ -23,19 +23,17 @@ async def ping_openai_compatible(
     base = (base_url or "").rstrip("/")
     if not key or not base:
         return False
-    # Prefer /models; some hosts 401 without key on root
-    url = f"{base}/models"
+    headers = {"Authorization": f"Bearer {key}"}
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            r = await client.get(
-                url, headers={"Authorization": f"Bearer {key}"}
-            )
-            # 200 = ok; 401/403 = key rejected; 404 = host up but no /models
-            if r.status_code == 200:
-                return True
-            if r.status_code in {401, 403}:
-                return False
-            return r.status_code < 500
+            # Prefer /models; Tokenn and some gateways expose /balance instead
+            for path in ("/models", "/balance"):
+                r = await client.get(f"{base}{path}", headers=headers)
+                if r.status_code == 200:
+                    return True
+                if r.status_code in {401, 403}:
+                    return False
+            return False
     except Exception as exc:
         logger.debug("OpenAI-compatible ping failed: %s", exc)
         return False

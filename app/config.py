@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     nn_health_timeout_sec: float = Field(default=5.0, alias="NN_HEALTH_TIMEOUT_SEC")
     # Unused when remote LLM is configured; kept for backwards-compatible .env
     nn_url: str = Field(default="http://nn:8000", alias="NN_URL")
-    # Default provider if DB has no override: gemini | deepseek | qwen
+    # Default provider if DB has no override: gemini | deepseek | qwen | tokenn
     coach_provider: str = Field(default="gemini", alias="COACH_PROVIDER")
     gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
     gemini_model: str = Field(default="gemini-2.5-flash-lite", alias="GEMINI_MODEL")
@@ -47,6 +47,12 @@ class Settings(BaseSettings):
         alias="QWEN_BASE_URL",
     )
     qwen_model: str = Field(default="qwen-flash", alias="QWEN_MODEL")
+    # Tokenn gateway (OpenAI-compatible Gemini proxy)
+    tokenn_api_key: str = Field(default="", alias="TOKENN_API_KEY")
+    tokenn_base_url: str = Field(
+        default="https://api.tokenn.pro/v1", alias="TOKENN_BASE_URL"
+    )
+    tokenn_model: str = Field(default="gemini-3.7-flash", alias="TOKENN_MODEL")
     coach_profile_enabled: bool = Field(default=False, alias="COACH_PROFILE_ENABLED")
     coach_live_cooldown_sec: float = Field(default=90.0, alias="COACH_LIVE_COOLDOWN_SEC")
 

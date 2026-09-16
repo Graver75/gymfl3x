@@ -23,11 +23,13 @@ SETTING_ENABLED = "coach_enabled"
 PROVIDER_GEMINI = "gemini"
 PROVIDER_DEEPSEEK = "deepseek"
 PROVIDER_QWEN = "qwen"
+PROVIDER_TOKENN = "tokenn"
 
 PROVIDER_LABELS = {
     PROVIDER_GEMINI: "Gemini",
     PROVIDER_DEEPSEEK: "DeepSeek",
     PROVIDER_QWEN: "Qwen",
+    PROVIDER_TOKENN: "Tokenn",
 }
 
 
@@ -50,6 +52,14 @@ def _specs_from_settings(settings: Settings | None = None) -> dict[str, Provider
             kind="gemini",
             api_key=(s.gemini_api_key or "").strip(),
             model=(s.gemini_model or "gemini-2.5-flash-lite").strip(),
+        ),
+        PROVIDER_TOKENN: ProviderSpec(
+            id=PROVIDER_TOKENN,
+            label="Tokenn",
+            kind="openai",
+            api_key=(s.tokenn_api_key or "").strip(),
+            model=(s.tokenn_model or "gemini-3.7-flash").strip(),
+            base_url=(s.tokenn_base_url or "https://api.tokenn.pro/v1").rstrip("/"),
         ),
         PROVIDER_DEEPSEEK: ProviderSpec(
             id=PROVIDER_DEEPSEEK,
@@ -109,7 +119,7 @@ async def get_active_provider_id(session: AsyncSession | None = None) -> str:
         return db_val
     if env_default in specs:
         return env_default
-    for pid in (PROVIDER_GEMINI, PROVIDER_DEEPSEEK, PROVIDER_QWEN):
+    for pid in (PROVIDER_TOKENN, PROVIDER_GEMINI, PROVIDER_DEEPSEEK, PROVIDER_QWEN):
         if provider_configured(specs[pid]):
             return pid
     return env_default if env_default in specs else PROVIDER_GEMINI
