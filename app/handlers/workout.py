@@ -27,6 +27,7 @@ from app.db.models import (
 )
 from app.db.session import SessionLocal
 from app.filters import PrivateChat
+from app.services.timeutil import utc_now
 from app.keyboards import (
     after_set_kb,
     difficulty_kb,
@@ -492,6 +493,7 @@ async def workout_mode_today(callback: CallbackQuery, state: FSMContext) -> None
             template_id=template.id,
             session_date=today,
             status=SessionStatus.active,
+            started_at=utc_now(),
         )
         session.add(ws)
         await session.commit()
@@ -578,6 +580,7 @@ async def workout_pick_template(callback: CallbackQuery, state: FSMContext) -> N
             session_date=today,
             status=SessionStatus.active,
             notes="free",
+            started_at=utc_now(),
         )
         session.add(ws)
         await session.commit()
@@ -645,6 +648,7 @@ async def workout_arch_pick(callback: CallbackQuery, state: FSMContext) -> None:
                 session_date=today,
                 status=SessionStatus.active,
                 notes="free-archive",
+                started_at=utc_now(),
             )
             session.add(ws)
             await session.commit()
@@ -1917,7 +1921,7 @@ async def _finalize_finished_session(callback: CallbackQuery, state: FSMContext)
             await callback.message.answer("Сессия не найдена")
             return
         ws.status = SessionStatus.finished
-        ws.finished_at = datetime.now(ZoneInfo(get_settings().timezone))
+        ws.finished_at = utc_now()
         if data.get("checkin_energy") is not None:
             ws.energy_1_5 = int(data["checkin_energy"])
         if data.get("checkin_sleep") is not None:

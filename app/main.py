@@ -73,6 +73,11 @@ async def main() -> None:
                 scrubbed["sessions"],
                 scrubbed["notes"],
             )
+        from app.services.session_time_migrate import migrate_session_finished_at_to_utc
+
+        migrated = await migrate_session_finished_at_to_utc(session)
+        if migrated:
+            logger.info("Session finished_at → UTC migration: %s rows", migrated)
 
     bot = Bot(
         token=settings.bot_token,

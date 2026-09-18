@@ -216,7 +216,7 @@ def format_user_date(value: date | datetime | str | None) -> str:
 
 
 def format_user_datetime(value: datetime | str | None) -> str:
-    """User-facing date+time as dd.mm.YYYY HH:MM."""
+    """User-facing date+time as dd.mm.YYYY HH:MM in app timezone."""
     if value is None:
         return "—"
     try:
@@ -227,9 +227,12 @@ def format_user_datetime(value: datetime | str | None) -> str:
             if raw.endswith("Z"):
                 raw = raw[:-1] + "+00:00"
             value = datetime.fromisoformat(raw)
-        if value.tzinfo is not None:
-            value = value.astimezone()
-        return value.strftime("%d.%m.%Y %H:%M")
+        from app.services.timeutil import as_local
+
+        local = as_local(value)
+        if local is None:
+            return "—"
+        return local.strftime("%d.%m.%Y %H:%M")
     except (TypeError, ValueError):
         return str(value)
 

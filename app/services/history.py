@@ -359,16 +359,10 @@ def _format_set_line(s: SessionSet) -> str:
 
 
 def _session_duration_label(ws: WorkoutSession) -> str | None:
-    if not ws.started_at or not ws.finished_at:
-        return None
-    started = ws.started_at
-    finished = ws.finished_at
-    if started.tzinfo is None or finished.tzinfo is None:
-        delta = finished.replace(tzinfo=None) - started.replace(tzinfo=None)
-    else:
-        delta = finished - started
-    total = int(delta.total_seconds())
-    if total < 0:
+    from app.services.timeutil import duration_seconds
+
+    total = duration_seconds(ws.started_at, ws.finished_at)
+    if total is None:
         return None
     minutes, seconds = divmod(total, 60)
     hours, minutes = divmod(minutes, 60)

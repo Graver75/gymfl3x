@@ -34,13 +34,9 @@ def _iso(dt: datetime | date | None) -> str | None:
 
 
 def _rest_seconds(prev: datetime | None, cur: datetime | None) -> int | None:
-    if not prev or not cur:
-        return None
-    if prev.tzinfo is None:
-        prev = prev.replace(tzinfo=timezone.utc)
-    if cur.tzinfo is None:
-        cur = cur.replace(tzinfo=timezone.utc)
-    return max(0, int((cur - prev).total_seconds()))
+    from app.services.timeutil import duration_seconds
+
+    return duration_seconds(prev, cur)
 
 
 def _followed_kg(actual: float | None, planned: float | None) -> bool | None:
