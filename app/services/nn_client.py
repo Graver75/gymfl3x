@@ -281,12 +281,23 @@ async def request_coach(
                 trimmed.append({"role": role, "content": content})
         hist = trimmed
 
-    # week_plan JSON for many exercises needs a larger completion budget
+    # Larger completion budget for long coach digests (many exercises / group)
     tokens = max_tokens
     if tokens is None and kind == "week_plan":
         tokens = 4096
-    if tokens is None and kind == "program_review":
+    elif tokens is None and kind == "program_review":
         tokens = 2048
+    elif tokens is None and kind in {
+        "session",
+        "session_group",
+        "week",
+        "week_group",
+        "exercise",
+        "month",
+    }:
+        tokens = 3072
+    elif tokens is None and kind == "live_set":
+        tokens = 1536
 
     from app.services.coach_prompts import resolve_system_prompt_for
 

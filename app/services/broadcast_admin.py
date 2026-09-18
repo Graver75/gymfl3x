@@ -85,20 +85,28 @@ async def send_with_divert(
     parse_mode: str | None = None,
 ) -> int:
     """Send message honoring test divert. Returns actual chat_id used."""
+    from app.services.telegram_safe import chunk_telegram_text
+
     chat_id, prefix = await resolve_outbound(
         session,
         intended_chat_id=intended_chat_id,
         intended_label=intended_label,
     )
     body = f"{prefix}{text}" if prefix else text
-    if len(body) > 4000:
-        body = body[:3990] + "…"
+    chunks = chunk_telegram_text(body, limit=3500)
+    if not chunks:
+        chunks = [body or "—"]
     kwargs: dict[str, Any] = {}
     if reply_markup is not None:
         kwargs["reply_markup"] = reply_markup
     if parse_mode is not None:
         kwargs["parse_mode"] = parse_mode
-    await bot.send_message(chat_id, body, **kwargs)
+    for i, chunk in enumerate(chunks):
+        # Keyboard only on last part
+        kw = dict(kwargs)
+        if i < len(chunks) - 1:
+            kw.pop("reply_markup", None)
+        await bot.send_message(chat_id, chunk, **kw)
     return chat_id
 
 
@@ -209,14 +217,14 @@ async def force_broadcast(
                     )
             out = text
             if ai_block:
-                out = f"{text}\n\n{ui.ICO_NN} Разбор ИИ\n{ai_block.strip()}"
-                if len(out) > 4000:
-                    room = 4000 - len(text) - 30
-                    out = (
-                        f"{text}\n\n{ui.ICO_NN} Разбор ИИ\n{ai_block.strip()[:room]}…"
-                        if room > 200
-                        else text[:3990] + "…"
-                    )
+                safe_ai = ui.coach_html(ai_block.strip())
+                await bot.send_message(target_chat_id, text)
+                from app.services.telegram_safe import chunk_telegram_text
+
+                ai_body = f"{ui.ICO_NN} Разбор ИИ\n{safe_ai}"
+                for chunk in chunk_telegram_text(ai_body, limit=3500):
+                    await bot.send_message(target_chat_id, chunk, parse_mode="HTML")
+                return f"Отправлено: {FORCE_KINDS[kind]} → {target_label}"
             elif await get_nn_status() != NnStatus.online:
                 out = f"{text}\n\n(ИИ офлайн — только факты)"
             await bot.send_message(target_chat_id, out)
@@ -252,9 +260,10 @@ async def force_broadcast(
                 f"{ui.ICO_NN} Недельный разбор команды "
                 f"({WEEKDAY_NAMES[today.weekday()]})\n\n{ui.coach_html(raw)}"
             )
-            if len(body) > 4000:
-                body = body[:3990] + "…"
-            await bot.send_message(target_chat_id, body)
+            from app.services.telegram_safe import chunk_telegram_text
+
+            for chunk in chunk_telegram_text(body, limit=3500):
+                await bot.send_message(target_chat_id, chunk, parse_mode="HTML")
             return f"Отправлено: {FORCE_KINDS[kind]} → {target_label}"
 
         if kind == "wdm":
@@ -272,9 +281,10 @@ async def force_broadcast(
             if not raw:
                 return "LLM не ответил на week"
             body = f"{ui.ICO_NN} <b>Недельный разбор</b>\n\n{ui.coach_html(raw)}"
-            if len(body) > 4000:
-                body = body[:3990] + "…"
-            await bot.send_message(target_chat_id, body)
+            from app.services.telegram_safe import chunk_telegram_text
+
+            for chunk in chunk_telegram_text(body, limit=3500):
+                await bot.send_message(target_chat_id, chunk, parse_mode="HTML")
             return f"Отправлено: {FORCE_KINDS[kind]} → {target_label}"
 
     return f"Неизвестный kind={kind}"

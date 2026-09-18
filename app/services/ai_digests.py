@@ -275,8 +275,6 @@ async def send_week_digests(bot: Bot, settings: Settings) -> None:
                 continue
             try:
                 body = f"{ui.ICO_NN} <b>Недельный разбор</b>\n\n{ui.coach_html(raw)}"
-                if len(body) > 4000:
-                    body = body[:3990] + "…"
                 from app.services.broadcast_admin import send_with_divert
 
                 await send_with_divert(
@@ -327,8 +325,6 @@ async def send_week_digests(bot: Bot, settings: Settings) -> None:
                     f"{ui.ICO_NN} Недельный разбор команды "
                     f"({WEEKDAY_NAMES[today.weekday()]})\n\n{ui.coach_html(raw)}"
                 )
-                if len(body) > 4000:
-                    body = body[:3990] + "…"
                 from app.services.broadcast_admin import send_with_divert
 
                 await send_with_divert(
@@ -337,6 +333,7 @@ async def send_week_digests(bot: Bot, settings: Settings) -> None:
                     intended_chat_id=group.chat_id,
                     intended_label=group.title or str(group.chat_id),
                     text=body,
+                    parse_mode="HTML",
                 )
                 await _mark_sent(session, group.chat_id, today, "ai_week_group")
             except Exception:

@@ -127,13 +127,30 @@ async def send_evening_recaps(bot: Bot, settings: Settings) -> None:
                 )
                 if ai_block:
                     safe_ai = ui.coach_html(ai_block)
-                    out = f"{text}\n\n{ui.ICO_NN} Разбор ИИ\n{safe_ai}"
-                    if len(out) > 4000:
-                        room = 4000 - len(text) - 30
-                        if room > 200:
-                            out = f"{text}\n\n{ui.ICO_NN} Разбор ИИ\n{safe_ai[:room]}…"
-                        else:
-                            out = text[:3990] + "…"
+                    # Prefer two messages over mid-word truncation of a combined blob
+                    try:
+                        await send_with_divert(
+                            bot,
+                            session,
+                            intended_chat_id=group.chat_id,
+                            intended_label=group.title or str(group.chat_id),
+                            text=text,
+                        )
+                        await send_with_divert(
+                            bot,
+                            session,
+                            intended_chat_id=group.chat_id,
+                            intended_label=group.title or str(group.chat_id),
+                            text=f"{ui.ICO_NN} Разбор ИИ\n{safe_ai}",
+                            parse_mode="HTML",
+                        )
+                        await _mark_sent(session, group.chat_id, today, "recap")
+                        continue
+                    except Exception:
+                        logger.exception(
+                            "evening recap split send failed chat=%s", group.chat_id
+                        )
+                        out = f"{text}\n\n{ui.ICO_NN} Разбор ИИ\n{safe_ai}"
             except Exception:
                 logger.exception("session_group AI failed")
             try:

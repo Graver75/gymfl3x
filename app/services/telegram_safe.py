@@ -29,6 +29,38 @@ def is_benign_telegram_error(exc: BaseException) -> bool:
     return False
 
 
+def chunk_telegram_text(text: str, limit: int = 3500) -> list[str]:
+    """Split long Telegram HTML/text on newlines; never mid-word hard-cut."""
+    text = (text or "").rstrip()
+    if not text:
+        return []
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    buf: list[str] = []
+    size = 0
+    for line in text.split("\n"):
+        # Hard-split absurdly long single lines (no newlines)
+        while len(line) > limit:
+            if buf:
+                chunks.append("\n".join(buf))
+                buf = []
+                size = 0
+            chunks.append(line[:limit])
+            line = line[limit:]
+        add = len(line) + (1 if buf else 0)
+        if buf and size + add > limit:
+            chunks.append("\n".join(buf))
+            buf = [line]
+            size = len(line)
+        else:
+            buf.append(line)
+            size += add
+    if buf:
+        chunks.append("\n".join(buf))
+    return chunks
+
+
 async def safe_callback_answer(
     callback: CallbackQuery,
     text: str | None = None,

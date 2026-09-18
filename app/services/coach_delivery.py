@@ -235,9 +235,12 @@ async def run_coach_and_reply(
         else:
             title = "ИИ-разбор"
         body = f"{ui.ICO_NN} <b>{title}</b>\n\n{safe}"
-        if len(body) > 4000:
-            body = body[:3990] + "…"
-        await waiting_message.edit_text(body)
+        from app.services.telegram_safe import chunk_telegram_text
+
+        chunks = chunk_telegram_text(body, limit=3500) or [body]
+        await waiting_message.edit_text(chunks[0])
+        for extra in chunks[1:]:
+            await bot.send_message(chat_id, extra)
         if kind == "live_set":
             await log_action(
                 user_id,
